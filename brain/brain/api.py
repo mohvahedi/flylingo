@@ -32,6 +32,8 @@ from .reservoir import FlyReservoir, load_connectome
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECKPOINT = ROOT / "brain" / "runs" / "curriculum" / "adapter.npz"
+#: The option-scoring checkpoint, produced once the matching architecture is trained.
+CHECKPOINT_OPTIONS = ROOT / "brain" / "runs" / "optionscorer" / "adapter.npz"
 
 EMBED_DIM = 256
 DIMS = 128
@@ -76,12 +78,43 @@ def _boot() -> None:
     conn = load_connectome()
     reservoir = FlyReservoir(conn, embedding_dim=EMBED_DIM, dims=DIMS, seed=7301)
     adapter = PolicyAdapter(in_dim=DIMS, n_actions=N_ACTIONS, hidden=256, seed=0)
-    if CHECKPOINT.exists():
-        adapter.load(CHECKPOINT)
+
+    # A checkpoint is only loaded if it was trained under the CURRENT encoder.
+    #
+    # This guard exists because it would have caught a real failure: the first encoder was
+    # built on Python's salted builtin hash(), so a checkpoint fit during training was
+    # applied at run time to features the server never reproduced. The model appeared
+    # trained and its probabilities were arbitrary. Loading a stale checkpoint silently is
+    # worse than loading none, so a mismatch is reported rather than ignored.
+    checkpoint_status = "none"
+    loaded_from = None
+    for candidate in (CHECKPOINT_OPTIONS, CHECKPOINT):
+        if not candidate.exists():
+            continue
+        try:
+            with np.load(candidate, allow_pickle=False) as d:
+                meta = json.loads(str(d["meta"])) if "meta" in d.files else {}
+            recorded = meta.get("encoder_fingerprint")
+            if recorded == ENCODER_FINGERPRINT:
+                adapter.load(candidate)
+                checkpoint_status = "loaded"
+                loaded_from = str(candidate)
+            else:
+                checkpoint_status = (
+                    f"skipped: trained under encoder {recorded!r}, "
+                    f"current is {ENCODER_FINGERPRINT!r}"
+                )
+        except Exception as exc:  # a corrupt checkpoint must not stop the service
+            checkpoint_status = f"skipped: {type(exc).__name__}: {exc}"
+        break
+
     STATE.update(
         connectome=conn,
         reservoir=reservoir,
         adapter=adapter,
+        checkpoint_status=checkpoint_status,
+        checkpoint_loaded_from=loaded_from,
+        encoder_fingerprint=ENCODER_FINGERPRINT,
         rng=np.random.default_rng(1234),
         curriculum=load_curriculum(),
         sessions={},
@@ -137,67 +170,23 @@ def _startup() -> None:
 
 
 # ------------------------------------------------------------------- encoder
-# A deterministic hashed bag-of-tokens encoder. Chosen deliberately: it is
-# training-free, reproducible across processes, and it cannot smuggle in task
-# knowledge from a pretrained language model, so any learning we measure is the
-# readout learning, not a language model answering the question for the fly.
+# The encoders live in brain/encoders.py so that training and serving use ONE
+# implementation. They were previously duplicated here and built on Python's builtin
+# hash(), which is salted per process: the same text produced different vectors in
+# different interpreters, so a checkpoint fit during training was applied to features the
+# server never reproduced. Anything that encodes text must import from brain.encoders.
+from .encoders import (  # noqa: E402
+    IDLE_MIX,
+    encode_challenge,
+    encode_idle,
+    encode_option_pairs,
+    encode_text,
+    encoder_fingerprint,
+    tick_embedding,
+)
 
-
-def encode_text(text: str, dim: int = EMBED_DIM) -> np.ndarray:
-    v = np.zeros(dim, np.float32)
-    t = " " + text.strip().lower() + " "
-    for n in (1, 2, 3):
-        for i in range(max(0, len(t) - n + 1)):
-            gram = t[i : i + n]
-            h = hash(gram) & 0xFFFFFFFF
-            v[h % dim] += 1.0 if (h >> 31) & 1 else -1.0
-    v += np.sin(np.arange(dim, dtype=np.float32) * 0.017)
-    nrm = float(np.linalg.norm(v)) + 1e-6
-    return (v / nrm).astype(np.float32)
-
-
-#: Strength of the continuously varying drive component, relative to the challenge text.
-#: See encode_idle for why this exists.
-IDLE_MIX = 0.25
-
-
-def encode_idle(tick: int, dim: int = EMBED_DIM) -> np.ndarray:
-    """A slowly varying drive, so the connectome keeps moving between answers.
-
-    Feeding the reservoir one constant embedding converges it to a fixed point within
-    about a dozen steps, which makes the live view settle into a still image. This adds
-    a deterministic, slowly drifting component so the network keeps exploring its own
-    dynamics while a challenge sits on screen.
-
-    What this is and is not: it is an input signal to a fixed dynamical system, chosen
-    so the visualization stays alive. It is not evidence of the fly attending to
-    anything, and it carries no task information. The decision at answer time still
-    comes from the challenge text through the same measured wiring.
-    """
-    i = np.arange(dim, dtype=np.float32)
-    # Three incommensurate frequencies per dimension: a long period, so the drive never
-    # visibly repeats within a lesson, and no shared phase between dimensions.
-    v = (
-        np.sin(0.013 * float(tick) + i * 0.11)
-        + 0.5 * np.sin(0.0071 * float(tick) + i * 0.037)
-        + 0.25 * np.sin(0.0031 * float(tick) + i * 0.211)
-    ).astype(np.float32)
-    nrm = float(np.linalg.norm(v)) + 1e-6
-    return (v / nrm).astype(np.float32)
-
-
-def tick_embedding(challenge: dict, tick: int) -> np.ndarray:
-    """The drive for one background step: the challenge text plus a drifting component."""
-    base = encode_challenge(challenge)
-    mixed = (1.0 - IDLE_MIX) * base + IDLE_MIX * encode_idle(tick)
-    nrm = float(np.linalg.norm(mixed)) + 1e-6
-    return (mixed / nrm).astype(np.float32)
-
-
-def encode_challenge(ch: dict) -> np.ndarray:
-    parts = [ch["prompt"], ch.get("type", ""), "en"]
-    parts += [str(o) for o in ch.get("options", [])]
-    return encode_text(" | ".join(parts))
+#: Fingerprint of the encoding scheme in force. Recorded in checkpoints and verified on load.
+ENCODER_FINGERPRINT = encoder_fingerprint()
 
 
 # --------------------------------------------------------------------- helpers
@@ -269,7 +258,9 @@ def health() -> dict:
         "neurons": int(conn.neurons),
         "edges": int(conn.edges),
         "dataset": "MaleCNS v1.0",
-        "checkpoint": str(CHECKPOINT) if CHECKPOINT.exists() else None,
+        "checkpoint": STATE.get("checkpoint_loaded_from"),
+        "checkpoint_status": STATE.get("checkpoint_status", "none"),
+        "encoder_fingerprint": STATE.get("encoder_fingerprint"),
         "uptime_s": round(time.time() - STATE["started"], 1),
     }
 
