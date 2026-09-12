@@ -20,23 +20,27 @@
  *    only appears when a frame is supplied and `dev` is not disabled.
  */
 import {
+  Component,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { ContactShadows, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { Fly } from './fly/Fly';
-import { useAnimator } from './fly/animator';
+import { RealFly } from './fly/RealFly';
+import { useAnimator, type LiveReadout } from './fly/animator';
 import { CHANNELS, modeLabel } from './fly/regions';
 import { groundMaterial } from './fly/materials';
 import { RIG, SHADOW_EXTENT, StudioEnvironment } from './fly/studio';
 import { Bloom } from './fly/Bloom';
-import type { Behavior, ReactionKind } from './fly/pose';
+import type { Behavior, Pose, ReactionKind } from './fly/pose';
 import { ControlStrip } from './components/ControlStrip';
 import { Sparkline } from './components/Sparkline';
 
@@ -59,6 +63,12 @@ export type FlyStageProps = {
   sparkline?: boolean;
   /** bloom pass over the whole stage. On by default; off costs one prop. */
   bloom?: boolean;
+  /**
+   * Which fly to render. 'auto' (the default) loads the supplied mesh in
+   * public/models/fly.glb and falls back to the procedural fly if it cannot be loaded.
+   * 'procedural' skips the asset entirely, which is also how the fallback path is tested.
+   */
+  asset?: 'auto' | 'procedural';
   /** slow orbit for the hero shot. Turn off when the caller drives the camera. */
   autoRotate?: boolean;
   /** geometry and renderer census, sampled twice a second. Optional, no-op by default. */
@@ -153,6 +163,56 @@ function StatsProbe({ onStats }: { onStats: (s: StageStats) => void }) {
   return null;
 }
 
+/**
+ * Renders the real mesh, and falls back to the procedural fly if the asset cannot be
+ * loaded at all (404, corrupt file, a driver that refuses the extensions). The page must
+ * never break because of the asset, so this pair catches both failure shapes: Suspense for
+ * a loader that throws while fetching, the boundary for one that throws while parsing.
+ */
+class ModelBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown): void {
+    console.warn('fly: model unavailable, rendering the procedural fallback', error);
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+type FlyOrModelProps = {
+  drive: Float32Array;
+  pose: Pose;
+  live: LiveReadout;
+  slotOf: (kind: string, slot: number) => number;
+  asset: 'auto' | 'procedural';
+};
+
+/**
+ * The hero path and its safety net.
+ *
+ * The procedural fly serves as both the Suspense fallback and the error fallback, so a
+ * viewer always sees an animated fly: the placeholder while the 729 KB mesh streams in,
+ * then the real one. If the asset never arrives, the placeholder simply stays, and the
+ * page is unaffected.
+ */
+function FlyOrModel({ drive, pose, live, slotOf, asset }: FlyOrModelProps) {
+  const procedural = <Fly drive={drive} pose={pose} live={live} slotOf={slotOf} />;
+  if (asset === 'procedural') return procedural;
+  return (
+    <ModelBoundary fallback={procedural}>
+      <Suspense fallback={procedural}>
+        <RealFly drive={drive} pose={pose} live={live} slotOf={slotOf} />
+      </Suspense>
+    </ModelBoundary>
+  );
+}
+
 /** Lightweight live state shared between the render loop and the React overlays. */
 type LiveRef = {
   behavior: Behavior;
@@ -173,6 +233,7 @@ function Stage({
   live,
   autoRotate,
   bloom,
+  asset,
   onStats,
 }: {
   activity?: number[];
@@ -187,6 +248,7 @@ function Stage({
   live: React.RefObject<LiveRef>;
   autoRotate: boolean;
   bloom: boolean;
+  asset: 'auto' | 'procedural';
   onStats?: (stats: StageStats) => void;
 }) {
   const anim = useAnimator({
@@ -286,12 +348,7 @@ function Stage({
         distance={3.2}
       />
 
-      <Fly
-        drive={anim.drive}
-        pose={anim.pose}
-        live={anim.live}
-        slotOf={slotOf}
-      />
+      <FlyOrModel drive={anim.drive} pose={anim.pose} live={anim.live} slotOf={slotOf} asset={asset} />
 
       {/* ground: one dark disc that fades to true black at the rim, so there is no plane
           edge and no horizon, plus a scale ring, no texture, no clutter */}
@@ -351,6 +408,7 @@ export function FlyStage({
   dev,
   sparkline = true,
   bloom = true,
+  asset = 'auto',
   autoRotate = true,
   onStats,
   className,
@@ -433,6 +491,7 @@ export function FlyStage({
           live={live}
           autoRotate={autoRotate}
           bloom={bloom}
+          asset={asset}
           onStats={onStats}
         />
       </Canvas>

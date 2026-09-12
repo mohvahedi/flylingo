@@ -22,6 +22,16 @@ import { createTrail, TRAIL_CAPACITY, TRAIL_LIFE, updateTrail } from '../live/tr
 const LIVE_SLOTS = 512;
 
 /**
+ * Queue a partial attribute upload. The live prefix is written every frame and
+ * the rest of the buffer is stale, so only that prefix is worth sending.
+ */
+function markUploaded(attr: THREE.BufferAttribute, count: number, itemSize: number): void {
+  attr.clearUpdateRanges();
+  attr.addUpdateRange(0, Math.max(0, count * itemSize));
+  attr.needsUpdate = true;
+}
+
+/**
  * Wall-clock time constant of the amber spike flash. The old code decayed the
  * flash by a fixed 0.72 per frame, which lasted about 170 ms at 60 fps and
  * under a millisecond in an unthrottled headless run, so the amber was
@@ -211,6 +221,7 @@ function Cloud({
           uPixelRatio: { value: 1 },
           uViewHeight: { value: 600 },
           uRef: { value: 0.274 },
+          uGate: { value: 0 },
           uPos: { value: new THREE.Color('#7fe0ea') },
           uNeg: { value: new THREE.Color('#6fa6de') },
           uShockColor: { value: new THREE.Color('#f0a030') },
@@ -285,7 +296,7 @@ function Cloud({
         vertexShader: TRAIL_VERT,
         fragmentShader: TRAIL_FRAG,
         uniforms: {
-          uSize: { value: 3.6 },
+          uSize: { value: 4.2 },
           uPixelRatio: { value: 1 },
           uViewHeight: { value: 600 },
           uLife: { value: TRAIL_LIFE },
@@ -493,13 +504,16 @@ function Cloud({
     );
     trailGeo.setDrawRange(0, liveDots);
     if (liveDots > 0) {
-      if (trailPosAttr.current) trailPosAttr.current.needsUpdate = true;
-      if (trailColAttr.current) trailColAttr.current.needsUpdate = true;
-      if (trailAgeAttr.current) trailAgeAttr.current.needsUpdate = true;
-      if (trailPowAttr.current) trailPowAttr.current.needsUpdate = true;
+      // Upload only the live prefix. The dots are packed at the front of every
+      // array, so re-uploading the whole 3,072 dot capacity every frame would be
+      // roughly twice the traffic for a buffer that is usually half empty.
+      if (trailPosAttr.current) markUploaded(trailPosAttr.current, liveDots, 3);
+      if (trailColAttr.current) markUploaded(trailColAttr.current, liveDots, 3);
+      if (trailAgeAttr.current) markUploaded(trailAgeAttr.current, liveDots, 1);
+      if (trailPowAttr.current) markUploaded(trailPowAttr.current, liveDots, 1);
     }
     metrics.trailPoints = liveDots;
-    metrics.trailUploadBytes = liveDots > 0 ? TRAIL_CAPACITY * 8 * 4 : 0;
+    metrics.trailUploadBytes = liveDots > 0 ? liveDots * 8 * 4 : 0;
 
     const pr = gl.getPixelRatio();
     const viewHeight = viewport.height || gl.domElement.height || 600;
@@ -523,6 +537,9 @@ function Cloud({
     liveMat.uniforms.uPixelRatio.value = pr;
     liveMat.uniforms.uViewHeight.value = viewHeight;
     liveMat.uniforms.uRef.value = refValue.current;
+    // Dead frame: the 512 pins are switched off entirely, so an all-zero
+    // state does not leave 512 dim dots glowing over the cloud.
+    liveMat.uniforms.uGate.value = refValue.current > 0 ? 1 : 0;
 
     controlsRef.current?.update();
 

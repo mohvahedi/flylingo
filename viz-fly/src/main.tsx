@@ -30,6 +30,8 @@ import { STATE_LEN, syntheticFrame } from './fly/regions';
 const PARAMS = new URLSearchParams(window.location.search);
 const FROZEN_CAM = PARAMS.has('frozen');
 const BLOOM = !PARAMS.has('nobloom');
+/** ?procedural forces the fallback path, so the safety net can be checked in a browser. */
+const ASSET: 'auto' | 'procedural' = PARAMS.has('procedural') ? 'procedural' : 'auto';
 
 const LIVE_MODES = ['intact', 'shuffled', 'no_edges', 'random_graph'] as const;
 type LiveMode = (typeof LIVE_MODES)[number];
@@ -118,9 +120,10 @@ function Demo() {
           bloom={BLOOM}
           autoRotate={!FROZEN_CAM}
           onStats={onStats}
+          asset={ASSET}
         />
       ) : (
-        <FlyStage bloom={BLOOM} autoRotate={!FROZEN_CAM} onStats={onStats} />
+        <FlyStage bloom={BLOOM} autoRotate={!FROZEN_CAM} onStats={onStats} asset={ASSET} />
       )}
 
       {/* standalone-only switcher, bottom right: the stage's own UI owns the top corners

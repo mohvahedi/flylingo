@@ -109,6 +109,16 @@ function baseLeg(i: number, out: LegPose): void {
 }
 
 /**
+ * The neutral pose of leg `i`, exported so the real-mesh rig can pose the asset relative
+ * to it. The authored rest pose of a static mesh already encodes a standing leg, so the
+ * real rig applies deviations from this rather than absolute angles: that is what keeps
+ * the two paths animating with the same amplitudes from one source of truth.
+ */
+export function legNeutral(i: number, out: LegPose): void {
+  baseLeg(i, out);
+}
+
+/**
  * Crossfade between two fully computed poses. Used so a behavior change (say walk to
  * groom) never snaps: both behaviors are evaluated at the same time `t` and interpolated.
  */

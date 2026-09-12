@@ -28,9 +28,9 @@ export const EDGE_HUBS = 4200;
 /** Hard cap on drawn segments, 2 per hub plus long links. */
 export const EDGE_CAP = 12000;
 /** Neighbour search radius in world units. The cloud spans about [-1, 1]. */
-export const EDGE_RADIUS = 0.115;
+export const EDGE_RADIUS = 0.16;
 /** Below this the two somas share a voxel (group-centroid duplicates). */
-export const EDGE_MIN_LENGTH = 0.018;
+export const EDGE_MIN_LENGTH = 0.05;
 export const EDGE_PARTNERS = 2;
 export const EDGE_LONG_EVERY = 8;
 export const EDGE_LONG_MIN = 0.18;

@@ -26,11 +26,11 @@
 
 import type { BrainLayout } from '../layout';
 
-export const TRAIL_CAPACITY = 2048;
+export const TRAIL_CAPACITY = 3072;
 export const TRAIL_LIFE = 0.55;
 export const TRAIL_SLOTS = 512;
 
-const SPAWN_INTERVAL = 0.03;
+const SPAWN_INTERVAL = 0.022;
 const TRAIL_SPEED = 0.6;
 const TRAIL_MAX_OFFSET = 0.24;
 const ACTIVITY_FLOOR = 0.42;

@@ -119,6 +119,7 @@ precision mediump float;
 uniform vec3 uPos;
 uniform vec3 uNeg;
 uniform vec3 uShockColor;
+uniform float uGate;
 varying float vAct;
 varying float vSign;
 varying float vShock;
@@ -134,10 +135,12 @@ void main() {
   // appears anywhere else in the picture.
   vec3 col = mix(base, uShockColor, shock);
   col += core * (0.22 + 0.45 * vAct + 0.75 * shock);
-  // A live slot with no activity and no spike is invisible, so a quiet brain
-  // shows only its anatomy. A spike is drawn at full strength regardless of
-  // how small the underlying state value was.
-  float alpha = mask * clamp(0.15 + 1.1 * vAct + vShock, 0.0, 1.0);
+  // A live slot with no activity and no spike is a dim marker only, so a quiet
+  // brain shows its anatomy and little else. uGate is zero on a dead frame:
+  // every one of the 512 pins then disappears instead of leaving 512 dim dots
+  // glowing over an all-zero state.
+  float energy = (0.15 + 1.1 * vAct + vShock) * uGate;
+  float alpha = mask * clamp(energy, 0.0, 1.0);
   if (alpha < 0.02) discard;
   // A fresh spike gets a ring at the edge of its (large) sprite. A spike pin
   // lands on the brightest node in the frame, and additive amber on top of a
@@ -148,7 +151,7 @@ void main() {
   if (shock > 0.02) {
     float ring = smoothstep(0.14, 0.225, r2) * (1.0 - smoothstep(0.225, 0.25, r2));
     col = mix(col, uShockColor * 1.18, ring);
-    alpha = max(alpha * (1.0 - 0.65 * ring), ring * shock);
+    alpha = max(alpha * (1.0 - 0.65 * ring), ring * shock * uGate);
   }
   gl_FragColor = vec4(col, alpha);
 }
