@@ -447,13 +447,16 @@ function Stage({
  */
 function SceneProbe() {
   const scene = useThree((s) => s.scene);
+  const camera = useThree((s) => s.camera);
   useEffect(() => {
-    const w = window as unknown as { __flyScene?: THREE.Scene };
+    const w = window as unknown as { __flyScene?: THREE.Scene; __flyCamera?: THREE.Camera };
     w.__flyScene = scene;
+    w.__flyCamera = camera;
     return () => {
       delete w.__flyScene;
+      delete w.__flyCamera;
     };
-  }, [scene]);
+  }, [scene, camera]);
   return null;
 }
 
