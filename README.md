@@ -247,3 +247,25 @@ The raw bounding box is about 4,765 x 5,767 x 3,527 units, so the mesh is roughl
 too large for a normal scene and is centred near `[319, -348, -511]`. Fit it at load time
 from its computed bounding box rather than hard-coding a scale, so replacing the asset does
 not silently break the framing.
+
+## Two traps that will bite you again
+
+**1. `duolingo-clone/` is its own git repository.** The parent repo therefore tracks only a
+commit pointer to it, and the entire app layer (`components/flylingo/`, `components/viz/`,
+`lib/flylingo/`, `app/lesson/fly/`) is invisible to the parent's history. Commit inside
+`duolingo-clone/` too, or the app work is not saved. De-nesting (removing the nested `.git`)
+would make the parent track it directly, but that is destructive and has not been done.
+
+**2. Build, THEN restart the server, THEN verify.** `next start` holds a build manifest in
+memory. Rebuilding while it runs leaves it serving a stale manifest, which presents as the
+page hanging on "loading" with a 404 and a chunk-not-found error. The symptom is
+indistinguishable from a code bug, and it cost a full debugging pass. The order is always
+build → restart → verify.
+
+## Syncing the visualizations into the app
+
+`viz-fly/` and `viz-brain/` are standalone Vite projects and the source of truth.
+`duolingo-clone/components/viz/` is **generated** by `python tools/sync_viz.py`. New work in
+the harnesses does not appear in the app until that script runs, so run it, rebuild, and
+restart. The app was briefly showing the procedural fly and labelling it "PROCEDURAL
+SPECIMEN" for exactly this reason.

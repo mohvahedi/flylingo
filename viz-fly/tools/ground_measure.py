@@ -19,7 +19,7 @@ import numpy as np
 from PIL import Image
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:5191/'
+BASE = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:5191/?frozen'
 ART = 'D:/Projects/flylingo/artifacts'
 BG = (8, 12, 17)
 
@@ -82,6 +82,12 @@ def main() -> int:
         browser = p.chromium.launch(args=LAUNCH_ARGS)
         page = browser.new_page(viewport={'width': 1440, 'height': 900})
         on_a, on_l = shot(page, BASE, ART + '/viz-fly-ground-on.png')
+        # the same frame is the hero shot: shadows on, camera frozen
+        with open(ART + '/viz-fly-hero.png', 'wb') as fh:
+            fh.write(open(ART + '/viz-fly-ground-on.png', 'rb').read())
+        cam = page.evaluate('() => { const c = window.__flyCamera; '
+                            'return c ? [c.position.toArray().map(n=>+n.toFixed(3)), c.fov] : null; }')
+        print('camera', cam)
         off_a, off_l = shot(page, BASE + ('&' if '?' in BASE else '?') + 'noshadow',
                             ART + '/viz-fly-ground-off.png')
         browser.close()
