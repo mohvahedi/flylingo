@@ -34,6 +34,10 @@ ROOT = Path(__file__).resolve().parents[2]
 CHECKPOINT = ROOT / "brain" / "runs" / "curriculum" / "adapter.npz"
 #: The option-scoring checkpoint, produced once the matching architecture is trained.
 CHECKPOINT_OPTIONS = ROOT / "brain" / "runs" / "optionscorer" / "adapter.npz"
+#: The prompt-index checkpoint. This is the architecture that actually learns the
+#: curriculum: reservoir features of the prompt, mapped to the answer index. See
+#: brain/learning/prompt_index.py for why, and for the honest attribution caveat.
+CHECKPOINT_PROMPT_INDEX = ROOT / "brain" / "runs" / "promptindex" / "adapter.npz"
 
 EMBED_DIM = 256
 DIMS = 128
@@ -74,6 +78,45 @@ class Session(BaseModel):
     correct: int = 0
 
 
+def _load_readout(candidate: Path):
+    """Load whichever readout class a checkpoint declares, or None if it is unusable.
+
+    Each class shares the same method surface (logits, probs, sample, observe,
+    parameters, gated_parameters, save, load), so the service can treat them alike.
+    """
+    from .learning.prompt_index import PromptIndexReadout
+
+    try:
+        with np.load(candidate, allow_pickle=False) as d:
+            meta = json.loads(str(d["meta"])) if "meta" in d.files else {}
+    except Exception as exc:
+        return None, f"skipped: {type(exc).__name__}: {exc}"
+
+    recorded = meta.get("encoder_fingerprint")
+    if recorded != ENCODER_FINGERPRINT:
+        return None, (
+            f"skipped: trained under encoder {recorded!r}, current is {ENCODER_FINGERPRINT!r}"
+        )
+
+    kind = meta.get("kind", "policy_adapter")
+    try:
+        # A prompt-index readout. Both spellings are accepted because the saver writes the
+        # descriptive "prompt_index_readout" while the service key is the shorter
+        # "prompt_index"; a mismatch here silently fell through to PolicyAdapter and failed
+        # on a missing W1, which looked like a corrupt checkpoint rather than a name bug.
+        if kind in ("prompt_index", "prompt_index_readout"):
+            in_dim = int(meta.get("in_dim", DIMS))
+            n_actions = int(meta.get("n_actions", N_ACTIONS))
+            obj = PromptIndexReadout(in_dim=in_dim, n_actions=n_actions)
+            obj.load(candidate)
+            return (obj, "prompt_index"), "loaded"
+        obj = PolicyAdapter(in_dim=DIMS, n_actions=N_ACTIONS, hidden=256, seed=0)
+        obj.load(candidate)
+    except Exception as exc:
+        return None, f"skipped: {type(exc).__name__}: {exc}"
+    return (obj, kind), "loaded"
+
+
 def _boot() -> None:
     conn = load_connectome()
     reservoir = FlyReservoir(conn, embedding_dim=EMBED_DIM, dims=DIMS, seed=7301)
@@ -86,32 +129,33 @@ def _boot() -> None:
     # applied at run time to features the server never reproduced. The model appeared
     # trained and its probabilities were arbitrary. Loading a stale checkpoint silently is
     # worse than loading none, so a mismatch is reported rather than ignored.
+    #
+    # Order matters: the prompt-index readout is the architecture measured to actually
+    # learn the curriculum, so it wins if present.
     checkpoint_status = "none"
     loaded_from = None
-    for candidate in (CHECKPOINT_OPTIONS, CHECKPOINT):
+    readout_kind = "policy_adapter"
+    for candidate in (CHECKPOINT_PROMPT_INDEX, CHECKPOINT_OPTIONS, CHECKPOINT):
         if not candidate.exists():
             continue
-        try:
-            with np.load(candidate, allow_pickle=False) as d:
-                meta = json.loads(str(d["meta"])) if "meta" in d.files else {}
-            recorded = meta.get("encoder_fingerprint")
-            if recorded == ENCODER_FINGERPRINT:
-                adapter.load(candidate)
-                checkpoint_status = "loaded"
-                loaded_from = str(candidate)
-            else:
-                checkpoint_status = (
-                    f"skipped: trained under encoder {recorded!r}, "
-                    f"current is {ENCODER_FINGERPRINT!r}"
-                )
-        except Exception as exc:  # a corrupt checkpoint must not stop the service
-            checkpoint_status = f"skipped: {type(exc).__name__}: {exc}"
+        loaded, checkpoint_status = _load_readout(candidate)
+        if loaded is not None:
+            adapter, readout_kind = loaded
+            loaded_from = str(candidate)
         break
+
+    # The decision path steps the reservoir on the PROMPT when the readout is a
+    # prompt-index model, and on the prompt-plus-options otherwise. Decisions run on their
+    # own reservoir instance so the live-streamed state, which the tick thread advances, is
+    # not perturbed by answering a question.
+    decision_reservoir = FlyReservoir(conn, embedding_dim=EMBED_DIM, dims=DIMS, seed=7301)
 
     STATE.update(
         connectome=conn,
         reservoir=reservoir,
         adapter=adapter,
+        readout_kind=readout_kind,
+        decision_reservoir=decision_reservoir,
         checkpoint_status=checkpoint_status,
         checkpoint_loaded_from=loaded_from,
         encoder_fingerprint=ENCODER_FINGERPRINT,
@@ -260,6 +304,7 @@ def health() -> dict:
         "dataset": "MaleCNS v1.0",
         "checkpoint": STATE.get("checkpoint_loaded_from"),
         "checkpoint_status": STATE.get("checkpoint_status", "none"),
+        "readout_kind": STATE.get("readout_kind"),
         "encoder_fingerprint": STATE.get("encoder_fingerprint"),
         "uptime_s": round(time.time() - STATE["started"], 1),
     }
@@ -343,12 +388,17 @@ def answer(req: AnswerReq) -> dict:
     r = STATE["reservoir"]
     lock = STATE["lock"]
 
-    # The fly's decision: one more step of real connectome activity, then a sampled
-    # choice. Held under the tick thread's lock so a tick cannot interleave between the
-    # step and the reward assignment, which would associate the reward with the wrong state.
+    # The fly's decision. Held under the tick thread's lock so a tick cannot interleave
+    # between the step and the reward assignment, which would associate the reward with the
+    # wrong state.
     with lock:
-        emb = encode_challenge(ch)
-        f = r.step(emb)
+        if STATE.get("readout_kind") == "prompt_index":
+            # Features of the PROMPT, which is what the prompt-index readout was trained on.
+            dr = STATE["decision_reservoir"]
+            dr.reset()
+            f = dr.step(encode_text(ch["prompt"]))
+        else:
+            f = r.step(encode_challenge(ch))
         action, logprob = adapter.sample(f, STATE["rng"])
         probs = adapter.probs(f)
 

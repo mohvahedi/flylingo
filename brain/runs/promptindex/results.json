@@ -1,0 +1,74 @@
+{
+  "kind": "prompt_index",
+  "curriculum": "D:\\Projects\\flylingo\\brain\\brain\\curriculum\\es-en.json",
+  "n_challenges": 97,
+  "n_classes": 4,
+  "chance": 0.25,
+  "epochs": 4000,
+  "encoder_fingerprint": "4ef0063b75dc44c7",
+  "arms": {
+    "intact": {
+      "accuracy": 1.0,
+      "feature_seconds": 1.6,
+      "curve": [
+        0.3917525773195876,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "params": 516
+    },
+    "shuffled": {
+      "accuracy": 1.0,
+      "feature_seconds": 1.9,
+      "curve": [
+        0.422680412371134,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "params": 516
+    },
+    "random_graph": {
+      "accuracy": 1.0,
+      "feature_seconds": 2.3,
+      "curve": [
+        0.4020618556701031,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "params": 516
+    },
+    "raw_encoding": {
+      "accuracy": 1.0,
+      "dim": 256
+    }
+  },
+  "spread_across_wirings": 0.0,
+  "raw_encoding_accuracy": 1.0,
+  "saved": "D:\\Projects\\flylingo\\brain\\runs\\promptindex\\adapter.npz",
+  "in_service_accuracy": 1.0,
+  "interpretation": "The readout memorises the curriculum. The measured connectome does NOT beat a shuffled or degree-matched random graph on this task, and the raw encoding with no reservoir matches them all, so the connectome contributes no measurable learning advantage here. It supplies a fixed nonlinear feature map."
+}

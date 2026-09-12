@@ -58,34 +58,47 @@ implementation's own wording. And all three live modes have nearly the same acti
 magnitude (0.105 intact, 0.108 shuffled, 0.096 random), so a viewer cannot tell them apart
 by looking; they differ in pattern, not level. That is why the mode badge exists.
 
-### Result: the intact connectome did NOT beat its controls
+### Result: the readout learns the vocabulary; the connectome does not beat its controls
 
-Reported as a null, because that is what it is. 30 epochs over the real 97-challenge
-curriculum, 73 train / 24 held out, chance 0.25 for four options:
+Reported in full, because the interesting part is *what* the learning is attributable to.
 
-| Arm | Final held-out accuracy | Best epoch | Train accuracy |
+**The learning works.** A trained prompt-index readout answers all 97 curriculum challenges
+correctly: measured 1.000, chance 0.250, 516 parameters.
+
+**But the connectome contributes nothing measurable.** Four independent measurements:
+
+| # | Measurement | Result | What it rules out |
 |---|---|---|---|
-| intact | 0.208 (5/24) | 0.500 | 0.288 to 0.397 |
-| parameter-matched control | 0.167 (4/24) | 0.375 | 0.301 to 0.466 |
-| shuffled graph | 0.250 (6/24) | 0.333 | 0.219 to 0.411 |
+| 1 | Vocabulary-disjoint held-out, encoding only, 5-fold CV over all 97 | 0.2784 (p=0.294) | No generalisation is possible from character n-grams |
+| 2 | Learn-to-criterion, option-scoring framing, all 97 repeated | 0.536 | Correctness is relational and cannot be recovered by a global linear rule |
+| 3 | Same framing, reservoir features vs raw vs controls | 0.567 vs 0.536, intact == shuffled == random | The connectome's features add nothing on that framing |
+| 4 | Prompt-index memorisation, reservoir features | **1.000** | It works, but see the spread |
 
-Exact binomial tails against 0.25: 0.753, 0.885, 0.578. None is distinguishable from
-chance, and the intact arm's best-epoch 0.500 is the maximum of 30 correlated evaluations,
-so it is selection-inflated rather than evidence. Nothing was tuned to chase a win and the
-run was not repeated to find a better draw.
+Measurement 4 is the one that matters for attribution. All three wirings and the raw
+encoding reach exactly the same score:
 
-**But this null is not evidence about the fly, and it took a separate experiment to show
-why.** Measured with the readout removed entirely, the encoding alone scores 0.2784 pooled
-over all 97 challenges by 5-fold cross-validation (chance 0.250, exact binomial p = 0.294,
-not significant). A character n-gram encoder cannot relate "Hello" to "Hola" without having
-seen that exact pairing, so no readout on these features can beat chance on a
-vocabulary-disjoint split. The fly was given an unsolvable task. See
-`brain/NOTES_task_learnability.md` and `scripts/diagnose_task_learnability.py`.
+| Features | dim | Accuracy (3 seeds) |
+|---|---|---|
+| raw prompt encoding, no reservoir | 256 | 1.000 |
+| intact connectome | 128 | 1.000 |
+| shuffled graph | 128 | 1.000 |
+| degree-matched random graph | 128 | 1.000 |
 
-The evaluation has since been reframed to learn-to-criterion with repetitions, so the task
-is solvable and the intact-versus-control comparison can mean something. That run is what
-the learning-curve tables below will report.
+Spread across the three wirings: **0.000**. The encoding with *no reservoir at all* also
+reaches 1.000. So the 166,700-neuron wiring is not needed for this result: it supplies a
+fixed nonlinear feature map, and any fixed nonlinear feature map of the same width does the
+same job. The learning is in the readout.
 
+This is a negative result about the connectome and it is reported as one, on the live UI as
+well as here. Earlier iterations of this README claimed the null was uninformative because
+the task was unsolvable; that was correct about the *first* framing (measurements 1 and 2)
+but it stopped being the whole story once a learnable framing existed (measurement 4). Being
+able to learn the task and finding the biology irrelevant to it is a stronger and more
+useful statement than "the task was too hard".
+
+What would actually test the connectome's dynamics is a task where memory or temporal
+integration is the bottleneck, rather than one-to-one vocabulary lookup that a linear map
+solves outright.
 
 ## Layout
 
