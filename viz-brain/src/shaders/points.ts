@@ -1,7 +1,7 @@
 // GLSL for the connectome cloud. Four programs:
 //   1. the full 166,700 point cloud,
 //   2. the small live overlay that carries the 512 sampled state values,
-//   3. a sampled hairline edge set,
+//   3. a sampled hairline edge set, drawn as screen-space ribbons,
 //   4. the decaying trail of travelling activity pulses.
 //
 // AUTO-RANGING. Measured telemetry state is mostly small: median |state| is
@@ -14,22 +14,54 @@
 //
 // The full cloud keeps a low ambient term from aBase (degree percentile) so the
 // anatomy stays legible when the brain is quiet, but that ambient term is
-// deliberately dim and carries no activity claim.
+// deliberately dim and carries no activity claim. On a dead frame the ambient
+// term is multiplied by uAmbientQuiet, so the all-zero control stays dark
+// instead of showing an unearned structure.
+//
+// HONESTY OF BRIGHTNESS. 27,038 neurons have no measured soma and sit on a
+// group centroid, so dozens or thousands of points share one coordinate. Those
+// points arrive with aFill = 1 and aScale = 1 / (points sharing that position),
+// are drawn smaller and tinted a cooler, darker cyan, and their alpha is
+// weighted by aScale. Without the weight, additive blending summed a 14,418
+// point pile into a blown out white disc and the placeholder geometry became
+// the loudest thing in the panel. The measured somata are the foreground.
 //
 // PALETTE. Deep near-black background, nodes on a cyan to pale blue ramp
 // (#5BC8D6, #7FE0EA, #BFEFF7), amber (#F0A030) reserved for the newest spikes.
+// Hue and core brightness carry real per neuron values: cell class moves a node
+// along the cyan to pale blue ramp, in-degree percentile drives the core,
+// activity drives the hot end. No third hue family is introduced.
+//
+// TONE. Nothing here is allowed to reach pure white. Every layer runs its
+// accumulated fragment colour through a soft saturating curve,
+// 1 - exp(-gain * x), which is the identity-ish for dim nodes and rolls off
+// towards 1 for bright ones, so a core keeps its hue instead of clipping. Amber
+// on the spike ring is composited after the curve so the one colour that must
+// stay readable stays saturated.
 
 export const STATIC_VERT = /* glsl */ `
 attribute float aBase;
 attribute float aField;
+attribute float aFill;
+attribute float aScale;
+attribute float aClass;
 uniform float uSize;
 uniform float uPixelRatio;
 uniform float uViewHeight;
 uniform float uGlobal;
 uniform float uRef;
+uniform float uFillSize;
+uniform float uAttenNear;
+uniform float uAttenFar;
+uniform float uFogNear;
+uniform float uFogFar;
 varying float vAct;
 varying float vHot;
 varying float vBase;
+varying float vFill;
+varying float vScale;
+varying float vClass;
+varying float vFog;
 float normField(float v) {
   // uRef <= 0 means a dead frame: contribute nothing at all.
   if (uRef <= 0.0001) return 0.0;
@@ -39,32 +71,53 @@ void main() {
   float act = normField(aField);
   vAct = act;
   vHot = aField >= 0.0 ? act : -act;
-  vBase = aBase;
+  vBase = clamp(aBase, 0.0, 1.0);
+  vFill = aFill;
+  vScale = clamp(aScale, 0.0, 1.0);
+  vClass = clamp(aClass, 0.0, 1.0);
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
+  float depth = max(-mv.z, 0.35);
+  // Depth cue: far nodes fade, which is what gives the volume its depth
+  // instead of reading as a flat scatter.
+  vFog = smoothstep(uFogNear, uFogFar, depth);
   float sizeScale = (1.0 + 0.9 * act) * (0.85 + 0.3 * aBase);
-  // Point size in PIXELS, scaled by viewport height so the cloud looks the same at
-  // any resolution. The previous form multiplied by 1/max(-mv.z, 0.35), and since the
-  // cloud spans only about [-1, 1] with the camera roughly 3 units back, that factor
-  // is about 0.33: a 2.4px point became about 0.8px, i.e. sub-pixel. 166,700 sub-pixel
-  // points rasterise to almost nothing, which is why the brain rendered as a sparse
-  // scatter of a few dozen dots instead of a cloud. The floor of 1.25px guarantees a
-  // point always covers a pixel, and the ceiling keeps a close-up from filling the
-  // screen with blobs.
-  float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale;
-  gl_PointSize = clamp(px, 1.25, 26.0);
+  // Centroid-placed neurons are drawn visibly smaller than measured somata.
+  sizeScale *= mix(1.0, uFillSize, aFill);
+  // Distance falloff, clamped at both ends. The earlier form was
+  // 1.0 / max(-mv.z, 0.35) on its own: the cloud spans about [-1, 1] with the
+  // camera roughly two units back, so that factor was close to 0.33 and a 2.4px
+  // point became sub-pixel. 166,700 sub-pixel points rasterise to almost
+  // nothing, which is why the brain once rendered as a sparse scatter. The
+  // clamp keeps the falloff a real depth cue without ever collapsing a point
+  // below the viewport-scaled size, and the final floor of 1.15px guarantees a
+  // point always covers a pixel.
+  float atten = clamp(uAttenNear / depth, 0.72, 1.4);
+  float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale * atten;
+  gl_PointSize = clamp(px, 1.15, 26.0);
 }
 `;
 
 export const STATIC_FRAG = /* glsl */ `
 precision mediump float;
 uniform vec3 uColorDim;
+uniform vec3 uColorPale;
 uniform vec3 uColorHot;
 uniform vec3 uColorNeg;
+uniform vec3 uColorInterp;
 uniform float uAmbient;
+uniform float uQuiet;
+uniform float uClassMix;
+uniform float uFillTint;
+uniform float uToneGain;
+uniform float uFogDim;
 varying float vAct;
 varying float vHot;
 varying float vBase;
+varying float vFill;
+varying float vScale;
+varying float vClass;
+varying float vFog;
 void main() {
   vec2 d = gl_PointCoord - 0.5;
   float r2 = dot(d, d);
@@ -74,15 +127,30 @@ void main() {
   // centre are what give the cloud the long-exposure look of the reference
   // rather than a flat scatter of equally lit dots.
   float core = smoothstep(0.055, 0.0, r2);
-  vec3 col = mix(uColorDim, uColorHot, pow(vAct, 0.6));
-  col = mix(col, uColorNeg, clamp(-vHot, 0.0, 1.0) * 0.5);
-  col += core * (0.2 + 0.55 * vAct) * (0.45 + 0.55 * vBase);
+  // Cell class moves the node along the cyan to pale blue ramp. This is the
+  // real per neuron value the panel carries, inside one hue family.
+  vec3 col = mix(uColorDim, uColorPale, vClass * uClassMix);
+  col = mix(col, uColorHot, pow(vAct, 0.6));
+  col = mix(col, uColorNeg, clamp(-vHot, 0.0, 1.0) * 0.45);
+  col += core * (0.18 + 0.5 * vAct) * (0.45 + 0.55 * vBase);
+  // Centroid-placed points take a cooler, darker tint so they read as
+  // interpolated fill rather than as measured anatomy.
+  col = mix(col, uColorInterp, vFill * uFillTint);
   // uAmbient carries the anatomy. It is scaled by degree percentile so dense
-  // cells outline the shape, and it is driven to a small value on a dead frame
-  // so an all-zero state renders dark instead of glowing.
-  float ambient = uAmbient * (0.35 + 0.65 * vBase);
-  float alpha = mask * (ambient + 0.95 * vAct * vAct);
-  gl_FragColor = vec4(col, alpha);
+  // cells outline the shape, gated by uAmbientQuiet so an all-zero state renders
+  // dark instead of glowing, and cut back again for centroid points. Every term
+  // is weighted by vScale so a pile of hundreds on one coordinate sums to about
+  // what a single point would, instead of burning a hole in the frame.
+  float quiet = uQuiet;
+  float ambient = uAmbient * quiet * (0.35 + 0.65 * vBase) * (1.0 - 0.8 * vFill) * vScale;
+  float alpha = mask * (ambient + 0.95 * vAct * vAct * vScale);
+  // Soft saturation: luminous, never clipped to flat white.
+  vec3 tone = 1.0 - exp(-max(col, 0.0) * uToneGain);
+  // Depth fog for an additive layer is a dimming, not a blend towards a fog
+  // colour: adding a colour would brighten the far side.
+  tone *= mix(1.0, uFogDim, vFog);
+  alpha *= mix(1.0, 0.55, vFog);
+  gl_FragColor = vec4(tone, clamp(alpha, 0.0, 0.92));
 }
 `;
 
@@ -96,6 +164,7 @@ uniform float uRef;
 varying float vAct;
 varying float vSign;
 varying float vShock;
+varying float vFog;
 void main() {
   // Same auto-range rule as the big cloud.
   float mag = uRef > 0.0001 ? clamp(abs(aActivity) / uRef, 0.0, 1.0) : 0.0;
@@ -104,12 +173,14 @@ void main() {
   vShock = aShock;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
+  float depth = max(-mv.z, 0.35);
+  vFog = smoothstep(1.5, 4.2, depth);
   // Spikes are rare, about 5 of 512 slots per frame, so individual spike points
   // have to be legible on their own. A spike pin gets a large fixed boost.
   float sizeScale = 1.0 + 2.0 * mag + 6.0 * aShock;
   // Same viewport-scaled pixel sizing as the static cloud, so the live overlay sits
   // on the same visual scale and never collapses below a visible pixel.
-  float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale;
+  float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale * clamp(2.4 / depth, 0.75, 1.35);
   gl_PointSize = clamp(px, 1.5, 40.0);
 }
 `;
@@ -120,9 +191,11 @@ uniform vec3 uPos;
 uniform vec3 uNeg;
 uniform vec3 uShockColor;
 uniform float uGate;
+uniform float uToneGain;
 varying float vAct;
 varying float vSign;
 varying float vShock;
+varying float vFog;
 void main() {
   vec2 d = gl_PointCoord - 0.5;
   float r2 = dot(d, d);
@@ -131,10 +204,9 @@ void main() {
   float core = smoothstep(0.055, 0.0, r2);
   vec3 base = vSign >= 0.0 ? uPos : uNeg;
   float shock = clamp(vShock, 0.0, 1.0);
-  // uShockColor is the amber. Only a live spike drives vShock, so amber never
-  // appears anywhere else in the picture.
-  vec3 col = mix(base, uShockColor, shock);
-  col += core * (0.22 + 0.45 * vAct + 0.75 * shock);
+  vec3 col = 1.0 - exp(-max(base, 0.0) * uToneGain);
+  col += core * (0.22 + 0.45 * vAct);
+  col *= mix(1.0, 0.7, vFog);
   // A live slot with no activity and no spike is a dim marker only, so a quiet
   // brain shows its anatomy and little else. uGate is zero on a dead frame:
   // every one of the 512 pins then disappears instead of leaving 512 dim dots
@@ -147,24 +219,51 @@ void main() {
   // bright cyan node blends straight to white, which is why the amber read as
   // absent in an earlier attempt. The ring sits about 8 px out, where the cyan
   // underneath is dim, so the amber survives; the centre is pulled back so the
-  // ring is what the eye catches.
+  // ring is what the eye catches. The amber is composited after the tone curve
+  // so the one colour that must stay legible is not greyed out by it.
   if (shock > 0.02) {
-    float ring = smoothstep(0.14, 0.225, r2) * (1.0 - smoothstep(0.225, 0.25, r2));
-    col = mix(col, uShockColor * 1.18, ring);
-    alpha = max(alpha * (1.0 - 0.65 * ring), ring * shock * uGate);
+    float ring = smoothstep(0.12, 0.225, r2) * (1.0 - smoothstep(0.225, 0.25, r2));
+    col = mix(col, uShockColor, ring * 0.92);
+    alpha = max(alpha * (1.0 - 0.6 * ring), ring * shock * uGate);
   }
-  gl_FragColor = vec4(col, alpha);
+  gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
 }
 `;
 
-// Hairline edges. WebGL draws lines one pixel wide, which is exactly the
-// reference look: a faint cyan mesh under the cloud, never a fat tube.
+// Hairline edges, drawn as screen-space ribbons instead of GL lines. A GL line
+// is exactly one device pixel wide, and at this camera distance the sampled
+// edges are a few pixels long and mostly diagonal, so a single-pixel line
+// disappeared under the cloud and the panel read as a point cloud rather than a
+// connectome. Each edge is a four vertex quad: the vertex shader projects both
+// endpoints, takes the screen-space direction, and offsets the quad sideways by
+// uWidthPx, so an edge is never thinner than that many pixels at any distance.
 export const EDGE_VERT = /* glsl */ `
+attribute vec3 aStart;
+attribute vec3 aEnd;
+attribute float aSide;
+attribute float aT;
 attribute float aWeight;
+uniform float uWidthPx;
+uniform float uViewHeight;
 varying float vWeight;
+varying float vFog;
 void main() {
   vWeight = aWeight;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  mat4 mvp = projectionMatrix * modelViewMatrix;
+  vec4 clipA = mvp * vec4(aStart, 1.0);
+  vec4 clipB = mvp * vec4(aEnd, 1.0);
+  vec4 self = aT < 0.5 ? clipA : clipB;
+  vec4 other = aT < 0.5 ? clipB : clipA;
+  vec2 ndcA = clipA.xy / max(abs(clipA.w), 1e-5);
+  vec2 ndcB = clipB.xy / max(abs(clipB.w), 1e-5);
+  vec2 dir = ndcB - ndcA;
+  float len = length(dir);
+  dir = len > 1e-6 ? dir / len : vec2(1.0, 0.0);
+  vec2 perp = vec2(-dir.y, dir.x);
+  float pxToNdc = 2.0 / max(uViewHeight, 1.0);
+  float halfWidth = max(uWidthPx, 1.0) * 0.5 * pxToNdc;
+  vFog = smoothstep(1.5, 4.2, max(self.w, 0.35));
+  gl_Position = vec4(self.xy + perp * aSide * halfWidth * self.w, self.zw);
 }
 `;
 
@@ -172,11 +271,16 @@ export const EDGE_FRAG = /* glsl */ `
 precision mediump float;
 uniform vec3 uColor;
 uniform float uOpacity;
+uniform float uToneGain;
 varying float vWeight;
+varying float vFog;
 void main() {
-  float a = uOpacity * vWeight;
+  // Low opacity cyan, dimmed with depth so the mesh sits under the cloud
+  // instead of drawing a grid over it.
+  float a = uOpacity * (0.35 + 0.65 * vWeight) * (1.0 - 0.65 * vFog);
   if (a < 0.002) discard;
-  gl_FragColor = vec4(uColor, a);
+  vec3 col = 1.0 - exp(-max(uColor, 0.0) * uToneGain);
+  gl_FragColor = vec4(col, a);
 }
 `;
 
@@ -193,6 +297,7 @@ uniform float uViewHeight;
 uniform float uLife;
 varying float vFade;
 varying vec3 vColor;
+varying float vFog;
 void main() {
   // 1.0 at spawn, 0.0 at uLife. Squaring makes the tail fall away quickly.
   float f = clamp(1.0 - aAge / uLife, 0.0, 1.0);
@@ -200,10 +305,12 @@ void main() {
   vColor = aColor;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
+  float depth = max(-mv.z, 0.35);
+  vFog = smoothstep(1.5, 4.2, depth);
   // Same viewport-relative pixel sizing as the cloud, so a trail dot is never
   // sub-pixel, and it shrinks along the tail instead of vanishing at once.
   float sizeScale = (0.35 + 1.05 * aPower) * (0.25 + 0.75 * f);
-  float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale;
+  float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale * clamp(2.4 / depth, 0.72, 1.4);
   gl_PointSize = clamp(px, 1.0, 20.0);
 }
 `;
@@ -211,16 +318,19 @@ void main() {
 export const TRAIL_FRAG = /* glsl */ `
 precision mediump float;
 uniform float uAlpha;
+uniform float uToneGain;
 varying float vFade;
 varying vec3 vColor;
+varying float vFog;
 void main() {
   vec2 d = gl_PointCoord - 0.5;
   float r2 = dot(d, d);
   if (r2 > 0.25) discard;
   float mask = smoothstep(0.25, 0.02, r2);
   float core = smoothstep(0.055, 0.0, r2);
-  float a = uAlpha * vFade * mask;
+  float a = uAlpha * vFade * mask * (1.0 - 0.5 * vFog);
   if (a < 0.004) discard;
-  gl_FragColor = vec4(vColor + core * vFade * 0.45, a);
+  vec3 col = 1.0 - exp(-max(vColor + core * vFade * 0.45, 0.0) * uToneGain);
+  gl_FragColor = vec4(col, a);
 }
 `;

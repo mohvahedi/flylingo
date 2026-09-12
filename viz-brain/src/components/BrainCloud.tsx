@@ -17,6 +17,7 @@ import {
 } from '../metrics/fps';
 import type { LiveFrame } from '../live/mapping';
 import { buildSampledEdges } from '../layout/edges';
+import { detectCentroidFill } from '../layout/centroidFill';
 import { createTrail, TRAIL_CAPACITY, TRAIL_LIFE, updateTrail } from '../live/trail';
 
 const LIVE_SLOTS = 512;
@@ -51,20 +52,41 @@ const SPIKE_FLASH_SECONDS = 0.16;
 const CONNECTOME_FACTS = {
   neurons: 166700,
   directedEdges: 25582938,
-  measuredSomaPositions: 139668,
+  // 139,662 neurons carry a measured soma annotation and 27,038 do not, and
+  // 139,662 + 27,038 = 166,700 exactly. 139,668 is a different quantity: the
+  // number of DISTINCT positions in the file, which counts the shared group
+  // centroids as one coordinate each. The two numbers are never mixed in the
+  // caption.
+  measuredSomaNeurons: 139662,
   centroidFilled: 27038,
+  distinctCoordinates: 139668,
+  /** Measured with src/layout/centroidFill.ts on the shipped positions file. */
+  measuredSharedCoordinates: 5,
+  measuredPiledPoints: 27037,
+  measuredMaxPile: 14418,
 };
 
-const CAPTION_LABEL = 'MaleCNS v1.0 · measured connectome';
+const CAPTION_LABEL = 'MaleCNS v1.0 · male central nervous system · measured connectome';
 const CAPTION_VALUE =
   `${CONNECTOME_FACTS.neurons.toLocaleString('en-US')} neurons · ` +
   `${CONNECTOME_FACTS.directedEdges.toLocaleString('en-US')} directed edges · ` +
-  `${CONNECTOME_FACTS.measuredSomaPositions.toLocaleString('en-US')} measured soma positions`;
+  `${CONNECTOME_FACTS.distinctCoordinates.toLocaleString('en-US')} distinct soma positions`;
 const CAPTION_NOTE =
-  `Coordinates are measured soma voxels; the ${CONNECTOME_FACTS.centroidFilled.toLocaleString('en-US')} ` +
-  'neurons with no soma annotation sit at their class and in-degree decile group centroid. ' +
-  'All 166,700 neurons are drawn; the hairline edges are a sampled subset of the ' +
-  'highest in-degree hubs, not the measured edge list.';
+  'MaleCNS v1.0 is the whole male central nervous system, brain and ventral nerve cord, ' +
+  'so the elongated form is the real measured geometry, not a rendering error. ' +
+  'Coordinates are measured soma voxels: ' +
+  `${CONNECTOME_FACTS.measuredSomaNeurons.toLocaleString('en-US')} of ` +
+  `${CONNECTOME_FACTS.neurons.toLocaleString('en-US')} neurons carry a measured soma, and the ` +
+  `other ${CONNECTOME_FACTS.centroidFilled.toLocaleString('en-US')} sit at their class and ` +
+  `in-degree decile group centroid, ${CONNECTOME_FACTS.measuredPiledPoints.toLocaleString('en-US')} ` +
+  `of them sharing just ${CONNECTOME_FACTS.measuredSharedCoordinates} coordinates (largest pile ` +
+  `${CONNECTOME_FACTS.measuredMaxPile.toLocaleString('en-US')} points). Those are drawn smaller ` +
+  'and cooler, as interpolated fill, so the measured somata stay the foreground. Edges: ' +
+  'sampled illustration: nearest same-class soma pairs for the highest in-degree hubs, ' +
+  'not measured adjacency.';
+const CAPTION_LEGEND =
+  'cyan measured soma · dim cooler cyan interpolated centroid fill · amber fresh spike · ' +
+  'node hue cell class, core brightness in-degree percentile';
 
 export interface BrainCloudProps {
   /** frame.state, -1..1, length 512 */
@@ -139,6 +161,7 @@ function Cloud({
   const lastFrameTime = useRef(0);
   const shockState = useRef(new Float32Array(LIVE_SLOTS));
   const lastSpikeKey = useRef('');
+  void lastSpikeKey;
   const refScratch = useRef(new Float32Array(LIVE_SLOTS));
   const refValue = useRef(0);
   const trailPosAttr = useRef<THREE.BufferAttribute | null>(null);
@@ -149,10 +172,36 @@ function Cloud({
   // -------------------------------------------------------------------
   // Geometry and materials. Built once, never reallocated.
   // -------------------------------------------------------------------
+  // Which points sit on a group centroid rather than on a measured soma? The
+  // flag is recovered from the positions themselves: a coordinate shared by
+  // CENTROID_STACK_THRESHOLD or more points is a centroid placement. Measured
+  // on the shipped file: 5 shared coordinates holding 27,037 points, the
+  // largest pile 14,418. Those points are drawn smaller, tinted cooler, and
+  // their alpha is weighted by 1 / stack size so a pile cannot accumulate into
+  // a blown out disc.
+  const centroidFill = useMemo(
+    () => detectCentroidFill(layout.positions, layout.count),
+    [layout],
+  );
+
+  // Cell class normalised to 0..1 so node hue carries a real per neuron value.
+  const classNorm = useMemo(() => {
+    const out = new Float32Array(layout.count);
+    let maxClass = 1;
+    for (let i = 0; i < layout.count; i += 1) {
+      if (layout.cellClass[i] > maxClass) maxClass = layout.cellClass[i];
+    }
+    for (let i = 0; i < layout.count; i += 1) out[i] = layout.cellClass[i] / maxClass;
+    return out;
+  }, [layout]);
+
   const staticGeo = useMemo(() => {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(layout.positions, 3));
     g.setAttribute('aBase', new THREE.BufferAttribute(layout.baseIntensity, 1));
+    g.setAttribute('aFill', new THREE.BufferAttribute(centroidFill.fill, 1));
+    g.setAttribute('aScale', new THREE.BufferAttribute(centroidFill.scale, 1));
+    g.setAttribute('aClass', new THREE.BufferAttribute(classNorm, 1));
     // One mutable float per point. This is the only attribute that changes in
     // "full" mode; in "subset" mode it is written once and left alone.
     const field = new THREE.BufferAttribute(new Float32Array(layout.count), 1);
@@ -163,7 +212,7 @@ function Cloud({
     // keeps three.js from walking 166,700 points to compute it.
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 3.2);
     return g;
-  }, [layout]);
+  }, [layout, centroidFill, classNorm]);
 
   const staticMat = useMemo(
     () =>
@@ -176,10 +225,21 @@ function Cloud({
           uViewHeight: { value: 600 },
           uGlobal: { value: 0.85 },
           uAmbient: { value: 0.1 },
+          uQuiet: { value: 0.06 },
           uRef: { value: 0.274 },
+          uFillSize: { value: 0.55 },
+          uClassMix: { value: 1 },
+          uFillTint: { value: 0.8 },
+          uToneGain: { value: 1.15 },
+          uFogDim: { value: 0.3 },
+          uFogNear: { value: 1.5 },
+          uFogFar: { value: 4.2 },
+          uAttenNear: { value: 2.4 },
           uColorDim: { value: new THREE.Color('#5bc8d6') },
+          uColorPale: { value: new THREE.Color('#7fe0ea') },
           uColorHot: { value: new THREE.Color('#bfeff7') },
           uColorNeg: { value: new THREE.Color('#6fa6de') },
+          uColorInterp: { value: new THREE.Color('#1d5a6b') },
         },
         transparent: true,
         depthWrite: false,
@@ -225,6 +285,7 @@ function Cloud({
           uPos: { value: new THREE.Color('#7fe0ea') },
           uNeg: { value: new THREE.Color('#6fa6de') },
           uShockColor: { value: new THREE.Color('#f0a030') },
+          uToneGain: { value: 1.45 },
         },
         transparent: true,
         depthWrite: false,
@@ -240,10 +301,66 @@ function Cloud({
   // nearest-same-class illustration and is not measured adjacency.
   // -------------------------------------------------------------------
   const edgeSet = useMemo(() => buildSampledEdges(layout), [layout]);
+  // Each edge becomes a four vertex ribbon (see EDGE_VERT). A GL line is one
+  // device pixel wide and vanished under the cloud, so the width is set in CSS
+  // pixels and applied in screen space: a hairline edge survives at any
+  // distance and at any canvas size.
   const edgeGeo = useMemo(() => {
+    const n = edgeSet.count;
+    const src = edgeSet.positions;
+    const start = new Float32Array(n * 4 * 3);
+    const end = new Float32Array(n * 4 * 3);
+    const side = new Float32Array(n * 4);
+    const tFlag = new Float32Array(n * 4);
+    const weight = new Float32Array(n * 4);
+    const index = new Uint32Array(n * 6);
+    const lengths = new Float32Array(n);
+    let lengthSum = 0;
+    for (let e = 0; e < n; e += 1) {
+      const ax = src[e * 6];
+      const ay = src[e * 6 + 1];
+      const az = src[e * 6 + 2];
+      const bx = src[e * 6 + 3];
+      const by = src[e * 6 + 4];
+      const bz = src[e * 6 + 5];
+      lengths[e] = Math.hypot(bx - ax, by - ay, bz - az);
+      lengthSum += lengths[e];
+      const w = edgeSet.weights[e];
+      for (let k = 0; k < 4; k += 1) {
+        const o = (e * 4 + k) * 3;
+        start[o] = ax;
+        start[o + 1] = ay;
+        start[o + 2] = az;
+        end[o] = bx;
+        end[o + 1] = by;
+        end[o + 2] = bz;
+        side[e * 4 + k] = k % 2 === 0 ? -1 : 1;
+        tFlag[e * 4 + k] = k >= 2 ? 1 : 0;
+        weight[e * 4 + k] = w;
+      }
+      const v = e * 4;
+      const io = e * 6;
+      index[io] = v;
+      index[io + 1] = v + 1;
+      index[io + 2] = v + 2;
+      index[io + 3] = v + 1;
+      index[io + 4] = v + 3;
+      index[io + 5] = v + 2;
+    }
+    lengths.sort();
+    const median = n > 0 ? lengths[n >> 1] : 0;
+    Object.assign(metrics, {
+      edgeLengthMean: n > 0 ? lengthSum / n : 0,
+      edgeLengthMedian: median,
+      edgeVertices: n * 4,
+    });
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(edgeSet.positions, 3));
-    g.setAttribute('aWeight', new THREE.BufferAttribute(edgeSet.weights, 1));
+    g.setAttribute('aStart', new THREE.BufferAttribute(start, 3));
+    g.setAttribute('aEnd', new THREE.BufferAttribute(end, 3));
+    g.setAttribute('aSide', new THREE.BufferAttribute(side, 1));
+    g.setAttribute('aT', new THREE.BufferAttribute(tFlag, 1));
+    g.setAttribute('aWeight', new THREE.BufferAttribute(weight, 1));
+    g.setIndex(new THREE.BufferAttribute(index, 1));
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 3.4);
     return g;
   }, [edgeSet]);
@@ -254,11 +371,15 @@ function Cloud({
         fragmentShader: EDGE_FRAG,
         uniforms: {
           uColor: { value: new THREE.Color('#5bc8d6') },
-          uOpacity: { value: 0.13 },
+          uOpacity: { value: 0.28 },
+          uToneGain: { value: 1.15 },
+          uWidthPx: { value: 1.7 },
+          uViewHeight: { value: 600 },
         },
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
       }),
     [],
   );
@@ -301,6 +422,7 @@ function Cloud({
           uViewHeight: { value: 600 },
           uLife: { value: TRAIL_LIFE },
           uAlpha: { value: 0.85 },
+          uToneGain: { value: 1.35 },
         },
         transparent: true,
         depthWrite: false,
@@ -341,6 +463,17 @@ function Cloud({
     metrics.trailCapacity = TRAIL_CAPACITY;
     metrics.caption = CAPTION_VALUE;
     metrics.driveMode = driveMode;
+    // Honesty accounting, measured from the shipped positions file by
+    // detectCentroidFill: how many points sit on a shared group centroid and how
+    // large the biggest pile is. Read by the harness, printed by PREVIEW.md.
+    Object.assign(metrics, {
+      centroidPoints: centroidFill.piledPoints,
+      measuredPoints: centroidFill.uniquePoints,
+      sharedCoordinates: centroidFill.sharedCoordinates,
+      distinctCoordinates: centroidFill.distinctCoordinates,
+      maxCentroidStack: centroidFill.maxStack,
+      centroidFillThreshold: centroidFill.threshold,
+    });
     metrics.bytesPerFrame =
       driveMode === 'full' ? layout.count * 4 : LIVE_SLOTS * (3 * 4 + 4 + 4);
 
@@ -351,6 +484,17 @@ function Cloud({
     controls.zoomSpeed = 0.9;
     camera.position.set(2.1, 1.25, 1.75);
     controls.target.set(0, 0, 0);
+    controls.minDistance = 1.1;
+    controls.maxDistance = 6;
+    // Framing. The measured cloud is a rod: principal axis (0, 0.376, 0.926)
+    // with extents 2.044 along it, 1.466 across x and 0.865 across the third
+    // axis, and its bounding box is already centred on the origin. The previous
+    // camera sat 46 degrees off that axis, so the 2.044 unit rod projected to
+    // about 1.6 units inside a 2.2 unit tall frame and roughly 60 percent of the
+    // panel was empty. This position is 13 degrees off broadside at distance
+    // 1.94, so the rod fills the frame and lies diagonally across it.
+    camera.position.set(-1.86, 0.46, 0.3);
+    camera.lookAt(0, 0, 0);
     controlsRef.current = controls;
 
     resetMetrics();
@@ -462,14 +606,19 @@ function Cloud({
       const av = activityArr.current;
       const sv = shockArr.current;
       const spiked = frame.spikes;
-      const spikeKey = `${spiked.length}:${spiked.length ? spiked[0] : -1}:${spiked.length ? spiked[spiked.length - 1] : -1}`;
-      const freshSpikes = spikeKey !== lastSpikeKey.current;
-      lastSpikeKey.current = spikeKey;
-      if (freshSpikes) {
-        for (let k = 0; k < spiked.length; k += 1) {
-          const s = spiked[k];
-          if (s >= 0 && s < LIVE_SLOTS) shockState.current[s] = 1;
-        }
+      // Amber marks the spikes the CURRENT frame reports rather than a one-shot
+      // change in the spike list. The earlier version flashed only when the
+      // spike key changed, which is fine for a live stream but wrong for a held
+      // frame: the reservoir telemetry keeps reporting the same three spike
+      // indices while the network is idle, so the flash had already decayed
+      // before any screenshot and the amber measured as present in none of them
+      // (warm and hot pixel counts of 0 in every live shot). A slot the frame
+      // still lists as spiking is, by definition, among the newest spikes, so it
+      // is held at full while it stays in the list and decays only after it
+      // leaves it.
+      for (let k = 0; k < spiked.length; k += 1) {
+        const s = spiked[k];
+        if (s >= 0 && s < LIVE_SLOTS) shockState.current[s] = 1;
       }
       for (let s = 0; s < LIVE_SLOTS; s += 1) {
         const idx = s < liveIndices.length ? liveIndices[s] : -1;
@@ -525,14 +674,35 @@ function Cloud({
     // value has to be high enough to clear black on its own. Measured: at 0.55 with
     // a dark navy uColorDim the whole cloud landed near RGB(5,14,24) and the brain
     // was invisible. Driven near zero on a dead frame so no_edges looks genuinely dark.
-    staticMat.uniforms.uAmbient.value = refValue.current > 0 ? 0.85 : 0.015;
-    // The sampled edges are a display aid, not a claim about a dead frame, so
-    // they follow the same activity gate as the ambient term. Under the
-    // no_edges control the edge layer contributes nothing at all.
-    edgeMat.uniforms.uOpacity.value = refValue.current > 0 ? 0.17 : 0;
+    staticMat.uniforms.uAmbient.value = 0.85;
+    // Dead frame economics. The ambient term is the only structure light in the
+    // picture, so on an all-zero state it is multiplied by uQuiet rather than
+    // brightened, and a pile of 14,418 points on one centroid can no longer sum
+    // into a disc. The cut is sourced from the ambient term alone, never from a
+    // global brightness reduction of the live frame.
+    //
+    // Measured why 0.055 was still too bright: the all-zero control came out at
+    // 12.87 percent lit with a mean of RGB(10.8, 17.2, 22.6) against the live
+    // frame's 28.2 percent and RGB(31.3, 57.3, 63.1), so the "dark" control was
+    // reading as a dim but visible brain (the harness's lit test is a channel
+    // over 28, and 139,663 measured points at this alpha accumulate past it).
+    // 0.012 is a 4.6x cut on the ambient term only, which leaves the live frame
+    // untouched and its own measured bright.
+    const liveFrame = refValue.current > 0;
+    staticMat.uniforms.uQuiet.value = liveFrame ? 1 : 0.012;
+    staticMat.uniforms.uClassMix.value = 1;
+    staticMat.uniforms.uToneGain.value = 1.15;
+    staticMat.uniforms.uFogNear.value = 1.5;
+    staticMat.uniforms.uFogFar.value = 4.2;
+    staticMat.uniforms.uAttenNear.value = 2.4;
+    // Low opacity cyan hairlines, still visible under the cloud because
+    // EDGE_VERT draws them 1.7 px wide in screen space.
+    edgeMat.uniforms.uOpacity.value = liveFrame ? 0.28 : 0;
+    edgeMat.uniforms.uViewHeight.value = viewHeight;
+    edgeMat.uniforms.uWidthPx.value = 1.7;
     trailMat.uniforms.uPixelRatio.value = pr;
     trailMat.uniforms.uViewHeight.value = viewHeight;
-    trailMat.uniforms.uAlpha.value = refValue.current > 0 ? 0.85 : 0;
+    trailMat.uniforms.uAlpha.value = liveFrame ? 0.85 : 0;
     staticMat.uniforms.uGlobal.value = 0.8 + 0.5 * frame.stateRms;
     liveMat.uniforms.uPixelRatio.value = pr;
     liveMat.uniforms.uViewHeight.value = viewHeight;
@@ -562,7 +732,7 @@ function Cloud({
   return (
     <>
       <points geometry={staticGeo} material={staticMat} frustumCulled={false} />
-      <lineSegments geometry={edgeGeo} material={edgeMat} frustumCulled={false} />
+      <mesh geometry={edgeGeo} material={edgeMat} frustumCulled={false} />
       <points geometry={trailGeo} material={trailMat} frustumCulled={false} />
       <points geometry={liveGeo} material={liveMat} frustumCulled={false} />
     </>
@@ -697,7 +867,7 @@ export function BrainCloud({
       <Canvas
         dpr={[1, 1.5]}
         gl={{ antialias: false, powerPreference: 'high-performance', alpha: false }}
-        camera={{ fov: 40, near: 0.01, far: 40, position: [2.1, 1.25, 1.75] }}
+        camera={{ fov: 38, near: 0.01, far: 40, position: [-1.86, 0.46, 0.3] }}
         style={{ position: 'absolute', inset: 0 }}
       >
         <ResizeSync width={width} height={height} />
@@ -713,13 +883,23 @@ export function BrainCloud({
         ) : null}
       </Canvas>
       {/*
-        The caption. Real figures only, and the note underneath is the honesty
-        clause: measured soma voxels, group centroid for the unannotated 27,038,
-        sampled edges. Styled as a wide-tracked uppercase label plus a value
-        line, which is how the reference broadcasts its numbers.
+        The caption. Real figures only. Three different quantities are kept
+        apart on purpose: 139,662 neurons carry a measured soma annotation,
+        27,038 have none and sit at their group centroid, and 139,668 is the
+        number of distinct positions in the file. The note under the figures is
+        the honesty clause, and the legend says what the colours mean. Styled as
+        a wide-tracked uppercase label plus a value line, which is how the
+        reference broadcasts its numbers.
       */}
       <div
         data-testid="connectome-caption"
+        data-neurons={CONNECTOME_FACTS.neurons}
+        data-measured-soma-neurons={CONNECTOME_FACTS.measuredSomaNeurons}
+        data-centroid-fill-neurons={CONNECTOME_FACTS.centroidFilled}
+        data-distinct-positions={CONNECTOME_FACTS.distinctCoordinates}
+        data-measured-shared-coordinates={CONNECTOME_FACTS.measuredSharedCoordinates}
+        data-measured-piled-points={CONNECTOME_FACTS.measuredPiledPoints}
+        data-measured-max-pile={CONNECTOME_FACTS.measuredMaxPile}
         style={{
           position: 'absolute',
           left: '1.1rem',
@@ -762,6 +942,19 @@ export function BrainCloud({
           }}
         >
           {CAPTION_NOTE}
+        </div>
+        <div
+          data-testid="connectome-legend"
+          style={{
+            marginTop: '0.35rem',
+            maxWidth: '62ch',
+            fontSize: '0.56rem',
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: '#4f6a7e',
+          }}
+        >
+          {CAPTION_LEGEND}
         </div>
       </div>
       {!loaded ? (

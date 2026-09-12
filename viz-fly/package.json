@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Standalone 3D fly animation harness for FlyLingo. Procedural fly rig, connectome-driven glow, zero external assets.",
+  "description": "Standalone 3D fly animation harness for FlyLingo. Photoreal GLB hero fly driven by named nodes, connectome-driven additive glow, procedural fly as fallback.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

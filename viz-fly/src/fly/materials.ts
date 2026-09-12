@@ -438,7 +438,7 @@ export function setaeMaterial(): THREE.MeshPhysicalMaterial {
 const GROUND_BODY = /* glsl */ `
 {
 	float r = length( vObjPos.xy );
-	float fade = smoothstep( 6.2, 1.5, r );
+	float fade = smoothstep( 7.8, 3.4, r );
 	diffuseColor.rgb *= fade * fade;
 	roughnessFactor = clamp(
 		roughnessFactor + 0.14 * flHash13( vObjPos * 26.0 ),
@@ -449,11 +449,16 @@ const GROUND_BODY = /* glsl */ `
 
 export function groundMaterial(radius = 7): THREE.MeshPhysicalMaterial {
   const m = new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color('#0d1319'),
-    roughness: 0.46,
+    // lifted from near black on purpose: a floor that is too dark to see cannot show a
+    // cast shadow, and the shadow is what puts the fly on the ground rather than on a
+    // gradient. Measured: at '#141c25' the whole shadow rig darkened the floor by only
+    // 11.6%, which reads as no shadow at all. Raised so the shadow has something to
+    // subtract from. Still far below any value that would put a visible horizon in frame.
+    color: new THREE.Color('#3a4657'),
+    roughness: 0.58,
     metalness: 0.0,
-    clearcoat: 0.45,
-    clearcoatRoughness: 0.42,
+    clearcoat: 0.22,
+    clearcoatRoughness: 0.55,
     envMapIntensity: 0.8,
   });
   return patchMaterial(m, {

@@ -32,6 +32,12 @@ const FROZEN_CAM = PARAMS.has('frozen');
 const BLOOM = !PARAMS.has('nobloom');
 /** ?procedural forces the fallback path, so the safety net can be checked in a browser. */
 const ASSET: 'auto' | 'procedural' = PARAMS.has('procedural') ? 'procedural' : 'auto';
+/**
+ * ?noshadow renders the same frame with the cast shadow, the contact pool and the per tarsus
+ * contact patches switched off. It is the control for the shadow measurement: everything else
+ * in the frame is identical, so the difference between the two shots is the shadowing.
+ */
+const SHADOWS = !PARAMS.has('noshadow');
 
 const LIVE_MODES = ['intact', 'shuffled', 'no_edges', 'random_graph'] as const;
 type LiveMode = (typeof LIVE_MODES)[number];
@@ -119,11 +125,18 @@ function Demo() {
           dev
           bloom={BLOOM}
           autoRotate={!FROZEN_CAM}
+          shadows={SHADOWS}
           onStats={onStats}
           asset={ASSET}
         />
       ) : (
-        <FlyStage bloom={BLOOM} autoRotate={!FROZEN_CAM} onStats={onStats} asset={ASSET} />
+        <FlyStage
+          bloom={BLOOM}
+          autoRotate={!FROZEN_CAM}
+          shadows={SHADOWS}
+          onStats={onStats}
+          asset={ASSET}
+        />
       )}
 
       {/* standalone-only switcher, bottom right: the stage's own UI owns the top corners

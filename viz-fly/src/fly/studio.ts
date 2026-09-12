@@ -4,9 +4,17 @@
  * Two separate things live here because they are the two halves of "expensive looking":
  *
  *  1. The punctual rig (RIG below): one hard warm key from the upper right, one cool rim
- *     from behind, one low cool fill, and a very shallow ambient. The key is the only
- *     shadow caster and it sits low, roughly 25 degrees above the horizon, which is what
- *     stretches the cast shadow into the long dramatic wedge the reference has.
+ *     off axis behind, a soft front-left fill, a low cool bounce and a very shallow
+ *     ambient. The key is the only shadow caster and it sits low, roughly 21 degrees above
+ *     the horizon, which is what stretches the cast shadow into the long dramatic wedge the
+ *     reference has.
+ *
+ *     The rim is deliberately NOT dead centre. A rim directly behind the subject puts the
+ *     brightest pixel of the frame on the halo behind the head, which destroys separation
+ *     instead of creating it, and clips the wings to flat white. Measured on the dead centre
+ *     version, the top of the range sat pinned at luma 252. It now sits roughly 46 degrees
+ *     off the camera axis to the back left, so the background behind the head stays black
+ *     and the bright edge lands on the fly's flank and wing tips.
  *
  *  2. A procedural HDR environment (StudioEnvironment below). Punctual lights alone give
  *     a dielectric nothing to reflect, and bare specular from a directional light reads
@@ -27,16 +35,22 @@ export const RIG: {
   key: { position: Vec3; intensity: number; color: string };
   rim: { position: Vec3; intensity: number; color: string };
   fill: { position: Vec3; intensity: number; color: string };
+  bounce: { position: Vec3; intensity: number; color: string };
   ambient: { intensity: number; color: string };
 } = {
-  // hard, warm, upper right. The only shadow caster in the scene.
-  key: { position: [5.4, 2.55, 2.3], intensity: 3.1, color: '#ffd9a2' },
-  // cool, from behind and a little left, separates the fly from the black
-  rim: { position: [-3.0, 1.7, -4.2], intensity: 2.6, color: '#78b4ff' },
+  // hard, warm, upper right, about 21 degrees above the horizon. The only shadow caster in
+  // the scene, and low enough that the wedge it throws runs long and to the left.
+  key: { position: [5.6, 2.35, 2.15], intensity: 3.0, color: '#ffd7a0' },
+  // cool, off axis to the back left: about 46 degrees from the camera axis, never dead
+  // centre, so the halo behind the head stays black and the edge lands on the flank
+  rim: { position: [-4.2, 2.05, -1.7], intensity: 1.05, color: '#7fb2ff' },
+  // soft key from the front left. Without it the face and the proboscis get no directional
+  // light at all and read as flat blue grey mush.
+  fill: { position: [-3.1, 1.55, 2.7], intensity: 0.6, color: '#f2dcc2' },
   // low and cool from the lower left: catches the belly and the underside of the wings
-  fill: { position: [-3.8, 0.4, 1.7], intensity: 0.85, color: '#3f6f9f' },
+  bounce: { position: [-2.6, -0.5, 1.4], intensity: 0.4, color: '#3f6f9f' },
   // shallow on purpose. Anything brighter flattens the shadow side into grey.
-  ambient: { intensity: 0.1, color: '#5f7f9f' },
+  ambient: { intensity: 0.1, color: '#4f6f8f' },
 };
 
 /** Half extent of the key light's shadow frustum. The fly spans about 0.9 units. */
@@ -67,8 +81,10 @@ function buildStudio(): THREE.Scene {
   scene.add(panel(5.5, 3.4, 1.6, 7, 4.5, [7.5, 8, 4]));
   // fill panel, lower left, broad and dim
   scene.add(panel(0.5, 1.0, 2.0, 9, 6, [-8, 1.2, 3]));
-  // rim strip, high and behind, thin and bright
-  scene.add(panel(0.9, 1.5, 3.2, 11, 1.6, [0, 5.5, -8]));
+  // rim strip: off axis to the back left, matching RIG.rim. Large and soft on purpose, so
+  // the rim is a broad grazing highlight along the flank rather than a punctual hotspot
+  // sitting in the middle of the frame behind the head.
+  scene.add(panel(0.9, 1.5, 3.2, 14, 3.4, [-9, 4.6, -6]));
 
   return scene;
 }

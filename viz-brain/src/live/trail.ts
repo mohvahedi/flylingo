@@ -27,15 +27,22 @@
 import type { BrainLayout } from '../layout';
 
 export const TRAIL_CAPACITY = 3072;
-export const TRAIL_LIFE = 0.55;
+export const TRAIL_LIFE = 0.6;
 export const TRAIL_SLOTS = 512;
 
-const SPAWN_INTERVAL = 0.022;
 const TRAIL_SPEED = 0.6;
-const TRAIL_MAX_OFFSET = 0.24;
+const TRAIL_MAX_OFFSET = 0.5;
+/**
+ * World-space spacing between successive dots of one trail. The old code
+ * spawned one dot per frame, so the trail's dot spacing was a function of the
+ * frame rate: at 30 fps that is a 16 px gap, and the tail read as a few loose
+ * specks rather than a stream. Spawning on distance travelled instead makes the
+ * dotted line the same length and density at 30 fps and at 300 fps.
+ */
+const TRAIL_SPACING = 0.02;
 const ACTIVITY_FLOOR = 0.42;
 const AMBER_SECONDS = 0.22;
-const SPAWN_BUDGET = 96;
+const SPAWN_BUDGET = 192;
 
 /** World-space bias so trails stream off to one side, as in the reference. */
 const STREAM_AXIS: [number, number, number] = [0.82, 0.22, -0.53];
@@ -139,6 +146,41 @@ function rebuildDirections(t: TrailBuffer, liveIndices: Int32Array): void {
 }
 
 /**
+ * Append one dot to the trail buffer at `off` world units along slot `s`'s ray.
+ * Returns false once the capacity is reached.
+ */
+function pushDot(
+  t: TrailBuffer,
+  pos: Float32Array,
+  idx: number,
+  s: number,
+  off: number,
+  power: number,
+): boolean {
+  if (t.count >= TRAIL_CAPACITY) return false;
+  const i = t.count;
+  t.count = i + 1;
+  t.spawned += 1;
+  const d = s * 3;
+  t.positions[i * 3] = pos[idx * 3] + t.slotDir[d] * off;
+  t.positions[i * 3 + 1] = pos[idx * 3 + 1] + t.slotDir[d + 1] * off;
+  t.positions[i * 3 + 2] = pos[idx * 3 + 2] + t.slotDir[d + 2] * off;
+  t.ages[i] = 0;
+  t.powers[i] = power;
+  const c = t.colors;
+  if (t.slotAmber[s] > 0) {
+    c[i * 3] = AMBER[0];
+    c[i * 3 + 1] = AMBER[1];
+    c[i * 3 + 2] = AMBER[2];
+  } else {
+    c[i * 3] = CYAN[0] + (PALE[0] - CYAN[0]) * power;
+    c[i * 3 + 1] = CYAN[1] + (PALE[1] - CYAN[1]) * power;
+    c[i * 3 + 2] = CYAN[2] + (PALE[2] - CYAN[2]) * power;
+  }
+  return true;
+}
+
+/**
  * Age, drop and spawn trail dots. Returns the live dot count.
  *
  * dt is in seconds. ref is the same per-frame reference the shaders use: a
@@ -226,31 +268,32 @@ export function updateTrail(
     }
     const power = fresh ? 1 : Math.min(1, mag);
     const step = dt * TRAIL_SPEED * (0.5 + power);
-    const clock = t.slotClock[s] + step;
-    t.slotClock[s] = clock > TRAIL_MAX_OFFSET ? TRAIL_MAX_OFFSET : clock;
-    if (t.slotWait[s] < SPAWN_INTERVAL) continue;
+    const prev = t.slotClock[s];
+    let clock = prev + step;
+    let wrapped = false;
+    // The head cycles along its ray and relaunches at the soma, so a pulse
+    // travels out, leaves its tail behind and is replaced by the next one.
+    // Clamping the head at the far end (the old behaviour) made every later dot
+    // spawn at one offset, which turned the tail into a single static blob.
+    if (clock >= TRAIL_MAX_OFFSET) {
+      clock -= TRAIL_MAX_OFFSET;
+      wrapped = true;
+    }
+    t.slotClock[s] = clock;
     t.slotWait[s] = 0;
-    if (t.count >= TRAIL_CAPACITY) break;
-    budget -= 1;
 
-    const i = t.count;
-    t.count = i + 1;
-    t.spawned += 1;
-    const off = t.slotClock[s];
-    const d = s * 3;
-    positions[i * 3] = pos[idx * 3] + t.slotDir[d] * off;
-    positions[i * 3 + 1] = pos[idx * 3 + 1] + t.slotDir[d + 1] * off;
-    positions[i * 3 + 2] = pos[idx * 3 + 2] + t.slotDir[d + 2] * off;
-    ages[i] = 0;
-    powers[i] = power;
-    if (t.slotAmber[s] > 0) {
-      colors[i * 3] = AMBER[0];
-      colors[i * 3 + 1] = AMBER[1];
-      colors[i * 3 + 2] = AMBER[2];
-    } else {
-      colors[i * 3] = CYAN[0] + (PALE[0] - CYAN[0]) * power;
-      colors[i * 3 + 1] = CYAN[1] + (PALE[1] - CYAN[1]) * power;
-      colors[i * 3 + 2] = CYAN[2] + (PALE[2] - CYAN[2]) * power;
+    // One dot per TRAIL_SPACING of travel, not one per frame, so spacing and
+    // tail length are the same at any frame rate. The dot at the head is the
+    // newest and brightest; the dots already laid down age behind it.
+    let from = wrapped ? 0 : Math.ceil(prev / TRAIL_SPACING);
+    const to = Math.floor(clock / TRAIL_SPACING);
+    for (let k = from; k <= to && budget > 0; k += 1) {
+      budget -= 1;
+      if (!pushDot(t, pos, idx, s, k * TRAIL_SPACING, power)) break;
+    }
+    if (budget > 0) {
+      budget -= 1;
+      pushDot(t, pos, idx, s, clock, power);
     }
   }
   return t.count;

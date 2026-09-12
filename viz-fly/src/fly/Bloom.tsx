@@ -28,16 +28,21 @@ export type BloomProps = {
   strength?: number;
   /** blur radius across the mip chain */
   radius?: number;
-  /** linear HDR luminance above which a pixel blooms. The background sits far below it. */
+  /**
+   * Linear HDR luminance above which a pixel blooms. 1.3 means only genuine HDR
+   * speculars: the previous 0.75 sat inside the range the lit wings and the rim already
+   * occupy, so it bloomed broad areas of the subject instead of its highlights and pushed
+   * the top of the frame to the clipping point.
+   */
   threshold?: number;
   /** mip chain resolution as a fraction of the drawing buffer */
   resolutionScale?: number;
 };
 
 export function Bloom({
-  strength = 0.6,
-  radius = 0.45,
-  threshold = 0.75,
+  strength = 0.24,
+  radius = 0.4,
+  threshold = 1.3,
   resolutionScale = 0.5,
 }: BloomProps) {
   const gl = useThree((s) => s.gl);
@@ -81,6 +86,17 @@ export function Bloom({
   }, [bloom, width, height, resolutionScale]);
 
   useEffect(() => () => composer.dispose(), [composer]);
+
+  // Published for the headless check, so a report quotes the settings the live renderer is
+  // actually running rather than a copy of the source constants.
+  useEffect(() => {
+    (window as unknown as { __flyBloom?: unknown }).__flyBloom = {
+      strength,
+      radius,
+      threshold,
+      resolutionScale,
+    };
+  }, [strength, radius, threshold, resolutionScale]);
 
   // priority > 0 takes the frame over: fiber stops calling gl.render and this renders
   // instead. Pass chain runs after every priority-0 subscriber, so drei's contact shadow

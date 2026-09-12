@@ -19,6 +19,10 @@
  *
  * Cost: the clone shares geometry and is never uploaded again, so it is 57 extra draw
  * calls against the same 6511 vertices, not a second mesh. Well inside the budget.
+ *
+ * Two things are added on top of the loaded mesh and neither of them touches its materials:
+ * procedural setae, parented to the model's own mesh nodes so they ride the animation
+ * (fly/setae.ts), and the per tarsus contact patches that ground it (fly/contacts.ts).
  */
 import { useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
@@ -27,6 +31,8 @@ import * as THREE from 'three';
 import { REGION_COLOR } from './regions';
 import type { Behavior, Pose } from './pose';
 import type { LiveReadout } from './animator';
+import { createContacts } from './contacts';
+import { buildSetae } from './setae';
 import {
   applyPose,
   buildRig,
@@ -43,10 +49,14 @@ import {
 const REGIONS: Region[] = ['head', 'thorax', 'abdomen', 'legs', 'wings'];
 
 /** Glow tuning. The floor rides on live.vitality, which is pinned to 0 on an inert frame. */
-const GLOW_FLOOR = 0.34;
-const GLOW_GAIN = 1.35;
-const GLOW_MAX = 0.92;
-const GLOW_REACTION = 0.28;
+const GLOW_FLOOR = 0.28;
+// deliberately under 1: typical drive sits near 0.25, so the response stays in the middle
+// of the range instead of pinning every region against the ceiling. Measured on the first
+// pass, the leg region sat at the 0.92 ceiling in both the live and the brisker frames,
+// which meant the busiest region stopped modulating at all.
+const GLOW_GAIN = 0.95;
+const GLOW_MAX = 0.95;
+const GLOW_REACTION = 0.3;
 
 const GOLD = new THREE.Color('#ffd9a2');
 
@@ -189,9 +199,11 @@ export type RealFlyProps = {
   pose: Pose;
   live: LiveReadout;
   slotOf: (kind: string, slot: number) => number;
+  /** draw the per tarsus contact patches and the thorax occlusion pool. Default true. */
+  contacts?: boolean;
 };
 
-export function RealFly({ drive, pose, live, slotOf }: RealFlyProps) {
+export function RealFly({ drive, pose, live, slotOf, contacts = true }: RealFlyProps) {
   const gltf = useGLTF(MODEL_URL);
 
   // the drei cache hands back one shared scene, and this component mutates node
@@ -206,7 +218,32 @@ export function RealFly({ drive, pose, live, slotOf }: RealFlyProps) {
   const fit = useMemo(() => fitModel(root), [root]);
   const rig = useMemo(() => buildRig(root), [root]);
   const shell = useMemo(() => buildShell(root), [root]);
+  // the overlay's own copy of the rig, so the glow follows the animation instead of
+  // hanging in the rest pose. Silent: the rig shape is already reported by the model's.
+  const shellRig = useMemo(() => buildRig(shell.root, { quiet: true }), [shell]);
   const probe = useMemo<ProbeSample>(() => createProbe(), []);
+
+  // Bristles and ground contact patches, built once from the loaded asset. The setae parent
+  // themselves to the model's own mesh nodes, so they ride the animation for free; the
+  // contact patches live at scene level, because the ground does not move with the fly.
+  const setae = useMemo(() => buildSetae(root, fit.scale), [root, fit]);
+  const contact = useMemo(() => createContacts(), []);
+
+  useEffect(() => {
+    (window as unknown as { __flySetae?: number }).__flySetae = setae.count;
+    if (import.meta.env.DEV) {
+      console.info(
+        `[fly] setae: ${setae.count} bristles across ${setae.meshes} meshes on ${setae.parts.join(', ')}`,
+      );
+    }
+  }, [setae]);
+
+  // The mesh is published so the headless check can read the seven instances back and
+  // confirm the patches sit where the feet are, rather than take the code's word for it.
+  useEffect(() => {
+    (window as unknown as { __flyContacts?: unknown }).__flyContacts = contact.mesh;
+    return () => contact.dispose();
+  }, [contact]);
 
   // the real mesh is the shadow caster: this is the single biggest realism win over the
   // procedural path, because the cast shadow is now the actual silhouette of the animal
@@ -231,10 +268,18 @@ export function RealFly({ drive, pose, live, slotOf }: RealFlyProps) {
 
   useFrame((state) => {
     applyPose(rig, pose);
+    applyPose(shellRig, pose);
     applyGlow(shell, pose, drive, slotOf, live.vitality);
+
+    // The contact patches read the rig after the pose has been applied, so the patches and
+    // the feet can never disagree, and a foot that lifts during the walk cycle visibly
+    // lightens and shrinks its patch.
+    contact.mesh.visible = contacts;
+    if (contacts) contact.update(rig);
+
     // kept current every frame so whatever the probe publishes is this frame's truth
     for (let i = 0; i < shell.entries.length; i += 1) {
-      probe.glow[i] = shell.entries[i].mat.opacity;
+      probe.glow[i] = shell.entries[i].mat.uniforms.uOpacity.value as number;
     }
 
     // Node-position witness. The scene must not be read back through WebGL, because
@@ -255,12 +300,19 @@ export function RealFly({ drive, pose, live, slotOf }: RealFlyProps) {
   });
 
   return (
-    <group position={fit.position} scale={fit.scale} name="fly-fit">
-      <group rotation={ORIENTATION} name="fly-orient">
-        <primitive object={root} />
+    <>
+      <group position={fit.position} scale={fit.scale} name="fly-fit">
+        <group rotation={ORIENTATION} name="fly-orient">
+          <primitive object={root} />
+          {/* inside the same orient group as the model: if the correction rotation ever has
+              to change for a replacement asset, the overlay follows it automatically */}
+          <primitive object={shell.group} />
+        </group>
       </group>
-      <primitive object={shell.group} />
-    </group>
+      {/* a sibling of the fit group, not a child: these live on the ground, in scene space,
+          at the world positions of the feet the rig just posed */}
+      <primitive object={contact.mesh} />
+    </>
   );
 }
 

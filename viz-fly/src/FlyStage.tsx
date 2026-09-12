@@ -8,9 +8,15 @@
  * schedule, and it looks alive rather than blank.
  *
  * Rendering choices worth knowing about:
- *  - no external assets. Every mesh is procedural and every material is built here, so
- *    the stage works with no network at all (no HDR file, no .glb, no fonts). The
- *    environment map is a room of emissive planes, baked at mount with PMREM.
+ *  - the hero path loads the supplied asset, public/models/fly.glb (Sketchfab "Fly" by
+ *    victorberdugo1, CC-BY-4.0, credit rendered by the host shell), through drei's
+ *    useGLTF, and leaves its own PBR textures and materials untouched. Everything that
+ *    is not the fly is procedural, the environment map is a room of emissive planes
+ *    baked at mount with PMREM, and the procedural fly stays as the fallback if the
+ *    asset is missing or fails to parse, so the panel never renders empty. No HDR file,
+ *    no fonts, no network.
+ *  - the connectome glow is an additive fresnel rim overlay rather than a recolour, so
+ *    the asset keeps reading as a photograph. See fly/RealFly.tsx.
  *  - cinematic rig: a hard warm key from the upper right that is the only shadow caster and
  *    sits low enough to throw a long cast shadow, a cool rim from behind, a low cool fill,
  *    and a shallow ambient. See fly/studio.ts.
@@ -71,6 +77,12 @@ export type FlyStageProps = {
   asset?: 'auto' | 'procedural';
   /** slow orbit for the hero shot. Turn off when the caller drives the camera. */
   autoRotate?: boolean;
+  /**
+   * Draw the cast shadow, the contact pool and the per tarsus contact patches. On by
+   * default. It exists so the shadow contribution can be measured against a matched frame
+   * with it switched off, and for a caller that has no shadow budget.
+   */
+  shadows?: boolean;
   /** geometry and renderer census, sampled twice a second. Optional, no-op by default. */
   onStats?: (stats: StageStats) => void;
   className?: string;
@@ -191,6 +203,8 @@ type FlyOrModelProps = {
   live: LiveReadout;
   slotOf: (kind: string, slot: number) => number;
   asset: 'auto' | 'procedural';
+  /** when false, the shadow rig and the ground contact patches are left out */
+  shadows: boolean;
 };
 
 /**
@@ -201,13 +215,13 @@ type FlyOrModelProps = {
  * then the real one. If the asset never arrives, the placeholder simply stays, and the
  * page is unaffected.
  */
-function FlyOrModel({ drive, pose, live, slotOf, asset }: FlyOrModelProps) {
+function FlyOrModel({ drive, pose, live, slotOf, asset, shadows }: FlyOrModelProps) {
   const procedural = <Fly drive={drive} pose={pose} live={live} slotOf={slotOf} />;
   if (asset === 'procedural') return procedural;
   return (
     <ModelBoundary fallback={procedural}>
       <Suspense fallback={procedural}>
-        <RealFly drive={drive} pose={pose} live={live} slotOf={slotOf} />
+        <RealFly drive={drive} pose={pose} live={live} slotOf={slotOf} contacts={shadows} />
       </Suspense>
     </ModelBoundary>
   );
@@ -234,6 +248,7 @@ function Stage({
   autoRotate,
   bloom,
   asset,
+  shadows,
   onStats,
 }: {
   activity?: number[];
@@ -249,6 +264,7 @@ function Stage({
   autoRotate: boolean;
   bloom: boolean;
   asset: 'auto' | 'procedural';
+  shadows: boolean;
   onStats?: (stats: StageStats) => void;
 }) {
   const anim = useAnimator({
@@ -309,12 +325,12 @@ function Stage({
       <StudioEnvironment intensity={0.32} />
 
       {/* key: hard and warm from the upper right. The only shadow caster, and low enough
-          (~25 degrees above the horizon) that the cast shadow runs long and to the left. */}
+          (~21 degrees above the horizon) that the cast shadow runs long and to the left. */}
       <directionalLight
         position={RIG.key.position}
         intensity={RIG.key.intensity}
         color={RIG.key.color}
-        castShadow
+        castShadow={shadows}
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
         shadow-camera-near={0.5}
@@ -326,17 +342,27 @@ function Stage({
         shadow-bias={-0.0006}
         shadow-normalBias={0.02}
       />
-      {/* rim: cool, from behind and a little left, separates the fly from the black */}
+      {/* rim: cool and off axis, 46 degrees from the camera axis to the back left. It was
+          dead centre behind the fly, which put the brightest pixel of the frame on the halo
+          behind the head and clipped the wings; off axis the halo moves to the flank and the
+          background behind the head stays black. */}
       <directionalLight
         position={RIG.rim.position}
         intensity={RIG.rim.intensity}
         color={RIG.rim.color}
       />
-      {/* fill: low and cool from the lower left, catches the belly and the wing undersides */}
+      {/* fill: a soft key from the front left, warm neutral, roughly half the key so the
+          face and the proboscis read as modelled rather than as flat blue grey mush */}
       <directionalLight
         position={RIG.fill.position}
         intensity={RIG.fill.intensity}
         color={RIG.fill.color}
+      />
+      {/* bounce: low and cool from the lower left, catches the belly and the wing undersides */}
+      <directionalLight
+        position={RIG.bounce.position}
+        intensity={RIG.bounce.intensity}
+        color={RIG.bounce.color}
       />
       {/* ambient: shallow on purpose. Anything brighter flattens the shadow side to grey. */}
       <ambientLight intensity={RIG.ambient.intensity} color={RIG.ambient.color} />
@@ -348,33 +374,44 @@ function Stage({
         distance={3.2}
       />
 
-      <FlyOrModel drive={anim.drive} pose={anim.pose} live={anim.live} slotOf={slotOf} asset={asset} />
+      <FlyOrModel
+        drive={anim.drive}
+        pose={anim.pose}
+        live={anim.live}
+        slotOf={slotOf}
+        asset={asset}
+        shadows={shadows}
+      />
 
       {/* ground: one dark disc that fades to true black at the rim, so there is no plane
-          edge and no horizon, plus a scale ring, no texture, no clutter */}
+          edge and no horizon, plus a scale ring, no texture, no clutter. It receives the
+          key light's shadow, which is the long wedge that puts the fly in the space. */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow material={ground}>
         <circleGeometry args={[7, 96]} />
       </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.003, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]}>
         <ringGeometry args={[1.55, 1.575, 96]} />
         <meshBasicMaterial color="#22d3ee" transparent opacity={0.14} />
       </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.003, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.006, 0]}>
         <ringGeometry args={[2.6, 2.615, 96]} />
         <meshBasicMaterial color="#38bdf8" transparent opacity={0.05} />
       </mesh>
 
-      {/* soft contact shadow under the body, in addition to the real cast shadow: it is
-          what grounds the tarsi. Real shadow map above gives the long dramatic wedge. */}
-      <ContactShadows
-        position={[0, 0.004, 0]}
-        opacity={0.55}
-        scale={5}
-        blur={2.6}
-        far={2.4}
-        resolution={512}
-        color="#000814"
-      />
+      {/* a depth based contact pool under the body, in addition to the real cast shadow and
+          to the per tarsus patches the fly draws itself (fly/contacts.ts). `far` is tight on
+          purpose: only geometry close to the floor contributes, so it reads as contact. */}
+      {shadows && (
+        <ContactShadows
+          position={[0, 0.002, 0]}
+          opacity={0.75}
+          scale={3.4}
+          blur={3}
+          far={1.0}
+          resolution={512}
+          color="#00060c"
+        />
+      )}
 
       <OrbitControls
         makeDefault
@@ -410,6 +447,7 @@ export function FlyStage({
   bloom = true,
   asset = 'auto',
   autoRotate = true,
+  shadows = true,
   onStats,
   className,
   style,
@@ -470,12 +508,35 @@ export function FlyStage({
   return (
     <div style={wrap} className={className}>
       <Canvas
-        shadows
+        // Shadow type named explicitly: three r186 removed PCFSoftShadowMap, which is what
+        // the boolean prop selects, so the boolean left the console full of "PCFSoftShadowMap
+        // has been removed" warnings (1616 of them in one run) while silently rendering PCF.
+        shadows={{ type: THREE.PCFShadowMap }}
         dpr={[1, 2]}
-        gl={{ antialias: true, powerPreference: 'high-performance' }}
+        gl={{
+          antialias: true,
+          powerPreference: 'high-performance',
+          alpha: false,
+          // Filmic on purpose. With a straight linear output a strong specular clips to flat
+          // white (measured max luma 252 of 255, wings and head detail gone); ACES rolls the
+          // top end off instead. Exposure is pulled slightly under 1 for the same reason.
+          // When bloom is off this is what three applies to the materials directly, and when
+          // bloom is on the composer's OutputPass applies it, so the look is the same either way.
+          toneMapping: THREE.ACESFilmicToneMapping,
+          toneMappingExposure: 0.95,
+        }}
         camera={{ position: [1.85, 1.15, 2.35], fov: 32, near: 0.05, far: 60 }}
         onCreated={({ gl }) => {
           gl.setClearColor('#080c11', 1);
+          gl.toneMapping = THREE.ACESFilmicToneMapping;
+          // published so the headless check can quote the live renderer rather than the source
+          (window as unknown as { __flyGl?: unknown }).__flyGl = {
+            toneMapping: gl.toneMapping,
+            toneMappingExposure: gl.toneMappingExposure,
+            outputColorSpace: gl.outputColorSpace,
+            shadowMap: gl.shadowMap.enabled,
+            shadowType: gl.shadowMap.type,
+          };
         }}
       >
         <Stage
@@ -492,6 +553,7 @@ export function FlyStage({
           autoRotate={autoRotate}
           bloom={bloom}
           asset={asset}
+          shadows={shadows}
           onStats={onStats}
         />
       </Canvas>
