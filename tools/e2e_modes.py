@@ -43,14 +43,20 @@ def post(path, body):
 
 
 def lit_pixels(page):
+    """Lit-pixel counts for the 2D chart canvases only.
+
+    The panel now also contains the fly's WebGL canvas, which has no 2D context, so
+    canvases are filtered to the ones a 2D context can be obtained from rather than
+    indexed positionally.
+    """
     return page.evaluate(
         """() => [...document.querySelectorAll('canvas')].map(c => {
              const ctx = c.getContext('2d');
-             if (!ctx) return -1;
+             if (!ctx) return null;
              const d = ctx.getImageData(0,0,c.width,c.height).data;
              let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 8) n++;
-             return n;
-           })"""
+             return {size: c.width + 'x' + c.height, lit: n};
+           }).filter(Boolean)"""
     )
 
 
@@ -114,12 +120,18 @@ with sync_playwright() as p:
         print("  PASS: no_edges yields state_rms 0, active_fraction 0, 0 spikes")
 
     # The dead brain must render darker than the live ones, not equally bright.
+    # Compare the sampled-neuron canvas (288x288), which is the one that renders state.
+    def state_canvas_lit(shields):
+        for c in shields:
+            if c["size"].startswith("288x288"):
+                return c["lit"]
+        return 0
+
     live_lit = max(
-        results[m]["canvas_lit_pixels"][0]
+        state_canvas_lit(results[m]["canvas_lit_pixels"])
         for m in ("intact", "shuffled", "random_graph")
-        if results[m]["canvas_lit_pixels"]
     )
-    dead_lit = ne["canvas_lit_pixels"][0] if ne["canvas_lit_pixels"] else 0
+    dead_lit = state_canvas_lit(ne["canvas_lit_pixels"])
     print(f"  live canvas lit pixels (max): {live_lit} | no_edges: {dead_lit}")
     if dead_lit >= live_lit:
         print("  FAIL: the no_edges brain is not visibly darker than a live one")

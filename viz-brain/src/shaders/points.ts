@@ -18,6 +18,7 @@ attribute float aBase;
 attribute float aField;
 uniform float uSize;
 uniform float uPixelRatio;
+uniform float uViewHeight;
 uniform float uGlobal;
 uniform float uRef;
 varying float vAct;
@@ -36,7 +37,16 @@ void main() {
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
   float sizeScale = (1.0 + 0.9 * act) * (0.85 + 0.3 * aBase);
-  gl_PointSize = uSize * uPixelRatio * sizeScale * (1.0 / max(-mv.z, 0.35));
+  // Point size in PIXELS, scaled by viewport height so the cloud looks the same at
+  // any resolution. The previous form multiplied by 1/max(-mv.z, 0.35), and since the
+  // cloud spans only about [-1, 1] with the camera roughly 3 units back, that factor
+  // is about 0.33: a 2.4px point became about 0.8px, i.e. sub-pixel. 166,700 sub-pixel
+  // points rasterise to almost nothing, which is why the brain rendered as a sparse
+  // scatter of a few dozen dots instead of a cloud. The floor of 1.25px guarantees a
+  // point always covers a pixel, and the ceiling keeps a close-up from filling the
+  // screen with blobs.
+  float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale;
+  gl_PointSize = clamp(px, 1.25, 26.0);
 }
 `;
 
@@ -70,6 +80,7 @@ attribute float aActivity;
 attribute float aShock;
 uniform float uSize;
 uniform float uPixelRatio;
+uniform float uViewHeight;
 uniform float uRef;
 varying float vAct;
 varying float vSign;
@@ -85,7 +96,10 @@ void main() {
   // Spikes are rare, about 5 of 512 slots per frame, so individual spike points
   // have to be legible on their own. A spike pin gets a large fixed boost.
   float sizeScale = 1.0 + 2.0 * mag + 6.0 * aShock;
-  gl_PointSize = uSize * uPixelRatio * sizeScale * (1.0 / max(-mv.z, 0.35));
+  // Same viewport-scaled pixel sizing as the static cloud, so the live overlay sits
+  // on the same visual scale and never collapses below a visible pixel.
+  float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale;
+  gl_PointSize = clamp(px, 1.5, 40.0);
 }
 `;
 

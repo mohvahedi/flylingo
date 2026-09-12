@@ -43,7 +43,17 @@ export interface NeuronData {
  * vite/client, so import.meta.env is not typed here and window.location is
  * used deliberately.
  */
-const DATA_BASE = new URL('data/', window.location.href);
+// The real MaleCNS metadata lives in a `data/` directory served from the site root.
+//
+// A page-relative URL resolves against window.location.href, which breaks as soon as
+// the component is mounted on a nested route (a lesson at /lesson/fly would look for
+// /lesson/fly/data/...). Both Vite and Next serve `public/` at the root, so an
+// absolute path behaves identically in the standalone harness and inside the app.
+// The override exists for embedding the component somewhere else entirely.
+const DATA_BASE = new URL(
+  (globalThis as { __FLYLINGO_DATA_BASE__?: string }).__FLYLINGO_DATA_BASE__ ?? '/data/',
+  window.location.origin,
+);
 
 async function fetchBinary(file: string): Promise<ArrayBuffer> {
   const res = await fetch(new URL(file, DATA_BASE).toString());

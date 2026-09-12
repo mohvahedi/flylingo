@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -36,6 +37,15 @@ EMBED_DIM = 256
 DIMS = 128
 N_ACTIONS = 4
 STREAM_HZ = 20
+
+# The connectome keeps running between answers.
+#
+# A measured full-graph step costs about 24.5 ms, so ticking at 10 Hz uses roughly a
+# quarter of one core. Without this the reservoir only advanced when a challenge was
+# answered, which made the "live" brain view a frozen picture between questions: the
+# activity is the whole point of the visualization, so it has to actually move.
+TICK_HZ = 10.0
+TICK_INTERVAL = 1.0 / TICK_HZ
 
 app = FastAPI(title="FlyLingo brain", version="0.1.0")
 app.add_middleware(
@@ -84,12 +94,46 @@ def _boot() -> None:
         # Populated only by an actual control evaluation. Left out until then.
         controls={},
         frames=0,
+        # Serializes reservoir and adapter access between the answer path and the
+        # background tick thread. Both mutate the same state.
+        lock=threading.RLock(),
+        ticks=0,
     )
+
+
+def _tick_loop() -> None:
+    """Step the connectome continuously so the live view is actually live.
+
+    The step is CPU-bound (about 24.5 ms for 166,700 neurons), so it runs on its own
+    daemon thread rather than in the event loop, and every access to the reservoir and
+    the adapter is taken under STATE['lock'] so an answer can never interleave with a
+    tick and read a half-updated state.
+    """
+    while True:
+        time.sleep(TICK_INTERVAL)
+        ch = STATE.get("challenge")
+        if ch is None:
+            continue
+        try:
+            with STATE["lock"]:
+                r = STATE["reservoir"]
+                tick = STATE.get("ticks", 0)
+                f = r.step(tick_embedding(ch, tick))
+                STATE["last_features"] = f
+                if STATE.get("session") is not None:
+                    STATE["probs"] = STATE["adapter"].probs(f)
+                STATE["ticks"] = tick + 1
+        except Exception:
+            # A failed tick must never kill the process; the next one will retry.
+            continue
 
 
 @app.on_event("startup")
 def _startup() -> None:
     _boot()
+    thread = threading.Thread(target=_tick_loop, name="connectome-tick", daemon=True)
+    thread.start()
+    STATE["tick_thread"] = thread
 
 
 # ------------------------------------------------------------------- encoder
@@ -110,6 +154,44 @@ def encode_text(text: str, dim: int = EMBED_DIM) -> np.ndarray:
     v += np.sin(np.arange(dim, dtype=np.float32) * 0.017)
     nrm = float(np.linalg.norm(v)) + 1e-6
     return (v / nrm).astype(np.float32)
+
+
+#: Strength of the continuously varying drive component, relative to the challenge text.
+#: See encode_idle for why this exists.
+IDLE_MIX = 0.25
+
+
+def encode_idle(tick: int, dim: int = EMBED_DIM) -> np.ndarray:
+    """A slowly varying drive, so the connectome keeps moving between answers.
+
+    Feeding the reservoir one constant embedding converges it to a fixed point within
+    about a dozen steps, which makes the live view settle into a still image. This adds
+    a deterministic, slowly drifting component so the network keeps exploring its own
+    dynamics while a challenge sits on screen.
+
+    What this is and is not: it is an input signal to a fixed dynamical system, chosen
+    so the visualization stays alive. It is not evidence of the fly attending to
+    anything, and it carries no task information. The decision at answer time still
+    comes from the challenge text through the same measured wiring.
+    """
+    i = np.arange(dim, dtype=np.float32)
+    # Three incommensurate frequencies per dimension: a long period, so the drive never
+    # visibly repeats within a lesson, and no shared phase between dimensions.
+    v = (
+        np.sin(0.013 * float(tick) + i * 0.11)
+        + 0.5 * np.sin(0.0071 * float(tick) + i * 0.037)
+        + 0.25 * np.sin(0.0031 * float(tick) + i * 0.211)
+    ).astype(np.float32)
+    nrm = float(np.linalg.norm(v)) + 1e-6
+    return (v / nrm).astype(np.float32)
+
+
+def tick_embedding(challenge: dict, tick: int) -> np.ndarray:
+    """The drive for one background step: the challenge text plus a drifting component."""
+    base = encode_challenge(challenge)
+    mixed = (1.0 - IDLE_MIX) * base + IDLE_MIX * encode_idle(tick)
+    nrm = float(np.linalg.norm(mixed)) + 1e-6
+    return (mixed / nrm).astype(np.float32)
 
 
 def encode_challenge(ch: dict) -> np.ndarray:
@@ -137,7 +219,8 @@ def _challenge_payload(ch: dict) -> dict:
 
 def _current_frame(state: dict, chosen=None, reward=None, correct=None) -> dict:
     r = state["reservoir"]
-    tel = r.telemetry()
+    with state["lock"]:
+        tel = r.telemetry()
     sess = state["session"]
     probs = state.get("probs")
     if probs is None:
@@ -161,6 +244,7 @@ def _current_frame(state: dict, chosen=None, reward=None, correct=None) -> dict:
         "reward": reward,
         "correct": correct,
         "mode": r.mode,
+        "ticks": int(state.get("ticks", 0)),
         "lesson_id": sess.lesson_id if sess else None,
         "lesson_progress": float(lesson_progress),
         "accuracy": float(acc),
@@ -266,18 +350,22 @@ def answer(req: AnswerReq) -> dict:
 
     adapter = STATE["adapter"]
     r = STATE["reservoir"]
+    lock = STATE["lock"]
 
-    # The fly's decision: one more step of real connectome activity, then a sampled choice.
-    emb = encode_challenge(ch)
-    f = r.step(emb)
-    action, logprob = adapter.sample(f, STATE["rng"])
-    probs = adapter.probs(f)
+    # The fly's decision: one more step of real connectome activity, then a sampled
+    # choice. Held under the tick thread's lock so a tick cannot interleave between the
+    # step and the reward assignment, which would associate the reward with the wrong state.
+    with lock:
+        emb = encode_challenge(ch)
+        f = r.step(emb)
+        action, logprob = adapter.sample(f, STATE["rng"])
+        probs = adapter.probs(f)
 
-    # The fly is rewarded for its OWN sampled action being right, never for the user's.
-    # Rewarding it for a choice it did not make would train on noise.
-    fly_correct = int(action) == int(ch["correctIndex"])
-    reward = 1.0 if fly_correct else -0.25
-    info = adapter.observe(reward, logprob, f)
+        # The fly is rewarded for its OWN sampled action being right, never for the user's.
+        # Rewarding it for a choice it did not make would train on noise.
+        fly_correct = int(action) == int(ch["correctIndex"])
+        reward = 1.0 if fly_correct else -0.25
+        info = adapter.observe(reward, logprob, f)
 
     # The user's answer drives the lesson itself: hearts, XP, progress.
     correct = int(req.choice_index) == int(ch["correctIndex"])
@@ -373,12 +461,14 @@ def control(req: ControlReq) -> dict:
     reapplied = False
     ch = STATE.get("challenge")
     if ch is not None:
-        r.reset()
-        f = r.step(encode_challenge(ch))
-        STATE["last_features"] = f
-        STATE["probs"] = STATE["adapter"].probs(f)
-        STATE["last_chosen"] = None
-        reapplied = True
+        with STATE["lock"]:
+            r.reset()
+            f = r.step(encode_challenge(ch))
+            STATE["last_features"] = f
+            if STATE.get("session") is not None:
+                STATE["probs"] = STATE["adapter"].probs(f)
+            STATE["last_chosen"] = None
+            reapplied = True
 
     return {
         "mode": r.mode,

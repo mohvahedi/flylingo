@@ -79,6 +79,8 @@ function Cloud({
 }) {
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera);
+  // Drawing-buffer height, used to size points in resolution-independent pixels.
+  const viewport = useThree((s) => s.size);
 
   const fieldAttr = useRef<THREE.BufferAttribute | null>(null);
   const activityAttr = useRef<THREE.BufferAttribute | null>(null);
@@ -120,10 +122,11 @@ function Cloud({
         uniforms: {
           uSize: { value: 2.4 },
           uPixelRatio: { value: 1 },
+          uViewHeight: { value: 600 },
           uGlobal: { value: 0.85 },
           uAmbient: { value: 0.1 },
           uRef: { value: 0.274 },
-          uColorDim: { value: new THREE.Color('#12304f') },
+          uColorDim: { value: new THREE.Color('#4d8fbf') },
           uColorHot: { value: new THREE.Color('#7fdcff') },
           uColorNeg: { value: new THREE.Color('#2b1d5e') },
         },
@@ -165,6 +168,7 @@ function Cloud({
         uniforms: {
           uSize: { value: 6.0 },
           uPixelRatio: { value: 1 },
+          uViewHeight: { value: 600 },
           uRef: { value: 0.274 },
           uPos: { value: new THREE.Color('#ffd166') },
           uNeg: { value: new THREE.Color('#3fa9f5') },
@@ -331,13 +335,19 @@ function Cloud({
     }
 
     const pr = gl.getPixelRatio();
+    const viewHeight = viewport.height || gl.domElement.height || 600;
     staticMat.uniforms.uPixelRatio.value = pr;
+    staticMat.uniforms.uViewHeight.value = viewHeight;
     staticMat.uniforms.uRef.value = refValue.current;
-    // Ambient structure light. Bright enough to read the anatomy on a live
-    // frame, driven near zero on a dead frame so no_edges looks genuinely dark.
-    staticMat.uniforms.uAmbient.value = refValue.current > 0 ? 0.55 : 0.06;
+    // Ambient structure light. This is what draws the anatomy: every non-active
+    // neuron is rendered in uColorDim at this alpha, blended additively, so the
+    // value has to be high enough to clear black on its own. Measured: at 0.55 with
+    // a dark navy uColorDim the whole cloud landed near RGB(5,14,24) and the brain
+    // was invisible. Driven near zero on a dead frame so no_edges looks genuinely dark.
+    staticMat.uniforms.uAmbient.value = refValue.current > 0 ? 0.75 : 0.06;
     staticMat.uniforms.uGlobal.value = 0.8 + 0.5 * frame.stateRms;
     liveMat.uniforms.uPixelRatio.value = pr;
+    liveMat.uniforms.uViewHeight.value = viewHeight;
     liveMat.uniforms.uRef.value = refValue.current;
 
     controlsRef.current?.update();
