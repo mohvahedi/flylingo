@@ -74,12 +74,17 @@ chance, and the intact arm's best-epoch 0.500 is the maximum of 30 correlated ev
 so it is selection-inflated rather than evidence. Nothing was tuned to chase a win and the
 run was not repeated to find a better draw.
 
-A bounding diagnostic, also not tuning: a **supervised** linear softmax readout on the same
-intact features memorises the training split (1.000) but reaches only 0.333 on held-out
-data. So the null is at least partly an encoding and generalisation limit of the current
-feature pipeline, not purely a failure of credit assignment. That distinction matters for
-what to try next: a better input encoding is a more promising lever here than a better
-learning rule.
+**But this null is not evidence about the fly, and it took a separate experiment to show
+why.** Measured with the readout removed entirely, the encoding alone scores 0.2784 pooled
+over all 97 challenges by 5-fold cross-validation (chance 0.250, exact binomial p = 0.294,
+not significant). A character n-gram encoder cannot relate "Hello" to "Hola" without having
+seen that exact pairing, so no readout on these features can beat chance on a
+vocabulary-disjoint split. The fly was given an unsolvable task. See
+`brain/NOTES_task_learnability.md` and `scripts/diagnose_task_learnability.py`.
+
+The evaluation has since been reframed to learn-to-criterion with repetitions, so the task
+is solvable and the intact-versus-control comparison can mean something. That run is what
+the learning-curve tables below will report.
 
 
 ## Layout
