@@ -130,6 +130,50 @@ explicitly enumerated subset of adapter weights (name it, count it, expose the c
 additionally modulated by the reward signal, mirroring DOOMFLY's dopamine-gated rule. Report
 both the count of gated weights and the count of gradient-updated weights.
 
+## Encoder interface (frozen)
+
+`brain.encoders` is the ONLY place text becomes vectors. Training and serving both import
+from it. It was previously duplicated inside `brain/api.py` and built on Python's builtin
+`hash()`, which is salted per process: the same input produced checksums 3.857, 5.022 and
+3.440 in three consecutive interpreters. Training and serving therefore used different
+encodings and the saved checkpoint was applied to features the server never reproduced.
+
+```python
+from brain.encoders import (
+    EMBED_DIM,            # 256
+    encode_text,          # (text, dim, seed) -> (dim,) unit norm
+    encode_option_pair,   # (prompt, option, dim, seed) -> (dim,)
+    encode_option_pairs,  # (challenge, dim, seed, center=True) -> (n_options, dim)
+    encode_challenge,     # (challenge, dim, seed) -> (dim,)
+    encode_idle,          # (tick, dim) -> (dim,) slowly varying drive
+    tick_embedding,       # (challenge, tick, mix, dim) -> (dim,)
+    encoder_fingerprint,  # () -> 8-byte hex identity of the encoding scheme
+    stable_hash64,        # (token) -> int, process independent
+)
+```
+
+Rules:
+
+- Stability across processes is a correctness property, not a nicety, and is asserted in
+  `tests/test_encoders.py` by spawning fresh interpreters. Do not reintroduce `hash()`.
+- `encode_option_pairs` returns one vector per candidate and, with `center=True`, subtracts
+  the mean across options. Measured: candidates sat at mean pairwise cosine +0.945 before
+  centering because the shared prompt dominated, and -0.317 after. Centering is what lets a
+  readout compare candidates; the shared component only drives them all into the same
+  region of the reservoir's tanh.
+- Row order matches `challenge['options']` exactly. Scorers depend on it.
+- Any change to how text becomes a vector MUST change `encoder_fingerprint()`, because
+  checkpoints are validated against it.
+
+### Checkpoint validity
+
+A checkpoint is loaded only if `json.loads(str(np.load(path)['meta']))['encoder_fingerprint']`
+equals the current `encoder_fingerprint()`. Anything else is refused and reported in
+`/health` as `checkpoint_status`. Loading a stale checkpoint silently is worse than loading
+none: the model looks trained while its probabilities are arbitrary. `/health` therefore
+reports `checkpoint`, `checkpoint_status` and `encoder_fingerprint`, and no surface may
+present a refused checkpoint as a working one.
+
 ## Curriculum interface (frozen)
 
 `brain.curriculum` loads `brain/curriculum/es-en.json`, validated by a pydantic model.
