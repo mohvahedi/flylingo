@@ -55,7 +55,7 @@ float flHash13( vec3 p ) {
 float flHash21( vec2 p ) {
 	p = fract( p * vec2( 0.1031, 0.1030 ) );
 	p += dot( p, p.yx + 33.33 );
-	return fract( ( p.x + p.y ) * p.z );
+	return fract( ( p.x + p.y ) * p.x );
 }
 float flLine( float v, float c, float w ) {
 	return 1.0 - smoothstep( 0.0, w, abs( v - c ) );
@@ -73,6 +73,14 @@ function after(src: string, needle: string, add: string, what: string): string {
   return src.replace(needle, `${needle}\n${add}`);
 }
 
+/** Same contract, but inserts above the anchor, i.e. in global scope. */
+function before(src: string, needle: string, add: string, what: string): string {
+  if (src.indexOf(needle) === -1) {
+    throw new Error(`fly material patch: anchor "${needle}" not found in ${what}`);
+  }
+  return src.replace(needle, `${add}\n${needle}`);
+}
+
 /**
  * Install a fragment patch and an object space position varying.
  *
@@ -80,12 +88,19 @@ function after(src: string, needle: string, add: string, what: string): string {
  * vertex: it means the pattern is defined on the primitive the part is built from, so a
  * unit sphere that has been squashed into a thorax still carries a stable, seamless
  * coordinate system that the non-uniform mesh scale cannot smear.
+ *
+ * The varying is declared ABOVE main, not inside it. three rewrites a WebGL2 shader with
+ * `#define varying out`, so a declaration in function scope would become a local `out`
+ * declaration, which GLSL ES rejects. The assignment itself stays inside main.
  */
 function patchMaterial(material: THREE.MeshPhysicalMaterial, p: Patch): THREE.MeshPhysicalMaterial {
   material.onBeforeCompile = (shader) => {
-    shader.vertexShader =
-      'varying vec3 vObjPos;\n' +
-      after(shader.vertexShader, 'void main() {', '\tvObjPos = position;', 'the vertex main');
+    shader.vertexShader = after(
+      before(shader.vertexShader, 'void main() {', 'varying vec3 vObjPos;', 'the vertex main'),
+      'void main() {',
+      '\tvObjPos = position;',
+      'the vertex main',
+    );
     shader.fragmentShader = after(
       after(shader.fragmentShader, '#include <common>', HELPERS, 'the fragment prelude'),
       '#include <emissivemap_fragment>',

@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { buildAnatomicalLayout, type BrainLayout } from '../layout';
 import { loadNeuronData } from '../data/loadNeuronData';
 import { syntheticFrame } from '../hooks/useSyntheticFrame';
-import { LIVE_FRAG, LIVE_VERT, STATIC_FRAG, STATIC_VERT } from '../shaders/points';
+import { LIVE_FRAG, LIVE_VERT, STATIC_FRAG, STATIC_VERT, EDGE_FRAG, EDGE_VERT, TRAIL_FRAG, TRAIL_VERT } from '../shaders/points';
 import {
   metrics,
   publishMetrics,
@@ -16,8 +16,37 @@ import {
   type MetricsSnapshot,
 } from '../metrics/fps';
 import type { LiveFrame } from '../live/mapping';
+import { buildSampledEdges } from '../layout/edges';
+import { createTrail, TRAIL_CAPACITY, TRAIL_LIFE, updateTrail } from '../live/trail';
 
 const LIVE_SLOTS = 512;
+
+// ---------------------------------------------------------------------------
+// Caption figures. Every number here is measured and is quoted from
+// public/data/layout_meta.json: 166,700 retained MaleCNS v1.0 neurons,
+// 25,582,938 directed edges in the graph, 139,668 distinct measured soma
+// positions, 27,038 neurons with no soma annotation placed at a group centroid
+// (139,662 + 27,038 = 166,700). The disclaimer below the figures is not
+// decorative: the coordinates really are measured soma voxels, and the drawn
+// edges really are a sampled illustration rather than the 25M edge graph.
+// ---------------------------------------------------------------------------
+const CONNECTOME_FACTS = {
+  neurons: 166700,
+  directedEdges: 25582938,
+  measuredSomaPositions: 139668,
+  centroidFilled: 27038,
+};
+
+const CAPTION_LABEL = 'MaleCNS v1.0 · measured connectome';
+const CAPTION_VALUE =
+  `${CONNECTOME_FACTS.neurons.toLocaleString('en-US')} neurons · ` +
+  `${CONNECTOME_FACTS.directedEdges.toLocaleString('en-US')} directed edges · ` +
+  `${CONNECTOME_FACTS.measuredSomaPositions.toLocaleString('en-US')} measured soma positions`;
+const CAPTION_NOTE =
+  `Coordinates are measured soma voxels; the ${CONNECTOME_FACTS.centroidFilled.toLocaleString('en-US')} ` +
+  'neurons with no soma annotation sit at their class and in-degree decile group centroid. ' +
+  'All 166,700 neurons are drawn; the hairline edges are a sampled subset of the ' +
+  'highest in-degree hubs, not the measured edge list.';
 
 export interface BrainCloudProps {
   /** frame.state, -1..1, length 512 */
@@ -94,6 +123,10 @@ function Cloud({
   const lastSpikeKey = useRef('');
   const refScratch = useRef(new Float32Array(LIVE_SLOTS));
   const refValue = useRef(0);
+  const trailPosAttr = useRef<THREE.BufferAttribute | null>(null);
+  const trailColAttr = useRef<THREE.BufferAttribute | null>(null);
+  const trailAgeAttr = useRef<THREE.BufferAttribute | null>(null);
+  const trailPowAttr = useRef<THREE.BufferAttribute | null>(null);
 
   // -------------------------------------------------------------------
   // Geometry and materials. Built once, never reallocated.
@@ -126,9 +159,9 @@ function Cloud({
           uGlobal: { value: 0.85 },
           uAmbient: { value: 0.1 },
           uRef: { value: 0.274 },
-          uColorDim: { value: new THREE.Color('#4d8fbf') },
-          uColorHot: { value: new THREE.Color('#7fdcff') },
-          uColorNeg: { value: new THREE.Color('#2b1d5e') },
+          uColorDim: { value: new THREE.Color('#5bc8d6') },
+          uColorHot: { value: new THREE.Color('#bfeff7') },
+          uColorNeg: { value: new THREE.Color('#6fa6de') },
         },
         transparent: true,
         depthWrite: false,
@@ -170,9 +203,85 @@ function Cloud({
           uPixelRatio: { value: 1 },
           uViewHeight: { value: 600 },
           uRef: { value: 0.274 },
-          uPos: { value: new THREE.Color('#ffd166') },
-          uNeg: { value: new THREE.Color('#3fa9f5') },
-          uShockColor: { value: new THREE.Color('#ffffff') },
+          uPos: { value: new THREE.Color('#7fe0ea') },
+          uNeg: { value: new THREE.Color('#6fa6de') },
+          uShockColor: { value: new THREE.Color('#f0a030') },
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    [],
+  );
+
+  // -------------------------------------------------------------------
+  // Sampled hairline edges. Built once per layout from the real high
+  // in-degree hubs over the measured positions. src/layout/edges.ts states
+  // exactly what is real here: the hubs and the somas are, the pairing is a
+  // nearest-same-class illustration and is not measured adjacency.
+  // -------------------------------------------------------------------
+  const edgeSet = useMemo(() => buildSampledEdges(layout), [layout]);
+  const edgeGeo = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(edgeSet.positions, 3));
+    g.setAttribute('aWeight', new THREE.BufferAttribute(edgeSet.weights, 1));
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 3.4);
+    return g;
+  }, [edgeSet]);
+  const edgeMat = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        vertexShader: EDGE_VERT,
+        fragmentShader: EDGE_FRAG,
+        uniforms: {
+          uColor: { value: new THREE.Color('#5bc8d6') },
+          uOpacity: { value: 0.13 },
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    [],
+  );
+
+  // -------------------------------------------------------------------
+  // Travelling pulse trail. One buffer, one draw call, reused every frame:
+  // the geometry is never rebuilt, only the attributes are rewritten.
+  // -------------------------------------------------------------------
+  const trail = useMemo(() => createTrail(layout), [layout]);
+  const trailGeo = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    const pa = new THREE.BufferAttribute(trail.positions, 3);
+    const ca = new THREE.BufferAttribute(trail.colors, 3);
+    const ga = new THREE.BufferAttribute(trail.ages, 1);
+    const wa = new THREE.BufferAttribute(trail.powers, 1);
+    pa.setUsage(THREE.DynamicDrawUsage);
+    ca.setUsage(THREE.DynamicDrawUsage);
+    ga.setUsage(THREE.DynamicDrawUsage);
+    wa.setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('position', pa);
+    g.setAttribute('aColor', ca);
+    g.setAttribute('aAge', ga);
+    g.setAttribute('aPower', wa);
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 3.4);
+    g.setDrawRange(0, 0);
+    trailPosAttr.current = pa;
+    trailColAttr.current = ca;
+    trailAgeAttr.current = ga;
+    trailPowAttr.current = wa;
+    return g;
+  }, [trail]);
+  const trailMat = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        vertexShader: TRAIL_VERT,
+        fragmentShader: TRAIL_FRAG,
+        uniforms: {
+          uSize: { value: 3.6 },
+          uPixelRatio: { value: 1 },
+          uViewHeight: { value: 600 },
+          uLife: { value: TRAIL_LIFE },
+          uAlpha: { value: 0.85 },
         },
         transparent: true,
         depthWrite: false,
@@ -187,8 +296,12 @@ function Cloud({
       staticMat.dispose();
       liveGeo.dispose();
       liveMat.dispose();
+      edgeGeo.dispose();
+      edgeMat.dispose();
+      trailGeo.dispose();
+      trailMat.dispose();
     },
-    [staticGeo, staticMat, liveGeo, liveMat],
+    [staticGeo, staticMat, liveGeo, liveMat, edgeGeo, edgeMat, trailGeo, trailMat],
   );
 
   // -------------------------------------------------------------------
@@ -202,6 +315,12 @@ function Cloud({
       : 'renderer string unavailable';
     metrics.points = layout.count;
     metrics.liveSlots = LIVE_SLOTS;
+    metrics.edgeCount = edgeSet.count;
+    metrics.edgeHubs = edgeSet.hubs;
+    metrics.edgeMeanLength = edgeSet.meanLength;
+    metrics.edgeSource = edgeSet.source;
+    metrics.trailCapacity = TRAIL_CAPACITY;
+    metrics.caption = CAPTION_VALUE;
     metrics.driveMode = driveMode;
     metrics.bytesPerFrame =
       driveMode === 'full' ? layout.count * 4 : LIVE_SLOTS * (3 * 4 + 4 + 4);
@@ -221,7 +340,7 @@ function Cloud({
       controls.dispose();
       controlsRef.current = null;
     };
-  }, [gl, camera, layout, driveMode]);
+  }, [gl, camera, layout, driveMode, edgeSet]);
 
   // -------------------------------------------------------------------
   // Live slot positions: written only when the mapping changes.
@@ -334,6 +453,37 @@ function Cloud({
       sa.needsUpdate = true;
     }
 
+    // Frame delta in seconds, shared by the trail and the fps record below.
+    const frameNow = performance.now();
+    const dtMs = lastFrameTime.current === 0 ? 16.7 : frameNow - lastFrameTime.current;
+    lastFrameTime.current = frameNow;
+    const dtSec = Math.min(0.05, dtMs / 1000);
+
+    // ------------------------------------------------------------------
+    // Travelling pulses. Driven by the same real spikes and real state
+    // values as the live overlay: a dead frame spawns nothing and the
+    // buffer empties by decay alone.
+    // ------------------------------------------------------------------
+    const liveDots = updateTrail(
+      trail,
+      liveIndices,
+      frame.state,
+      frame.spikes,
+      refValue.current,
+      nslots,
+      hasIds,
+      dtSec,
+    );
+    trailGeo.setDrawRange(0, liveDots);
+    if (liveDots > 0) {
+      if (trailPosAttr.current) trailPosAttr.current.needsUpdate = true;
+      if (trailColAttr.current) trailColAttr.current.needsUpdate = true;
+      if (trailAgeAttr.current) trailAgeAttr.current.needsUpdate = true;
+      if (trailPowAttr.current) trailPowAttr.current.needsUpdate = true;
+    }
+    metrics.trailPoints = liveDots;
+    metrics.trailUploadBytes = liveDots > 0 ? TRAIL_CAPACITY * 8 * 4 : 0;
+
     const pr = gl.getPixelRatio();
     const viewHeight = viewport.height || gl.domElement.height || 600;
     staticMat.uniforms.uPixelRatio.value = pr;
@@ -345,6 +495,13 @@ function Cloud({
     // a dark navy uColorDim the whole cloud landed near RGB(5,14,24) and the brain
     // was invisible. Driven near zero on a dead frame so no_edges looks genuinely dark.
     staticMat.uniforms.uAmbient.value = refValue.current > 0 ? 0.75 : 0.06;
+    // The sampled edges are a display aid, not a claim about a dead frame, so
+    // they follow the same activity gate as the ambient term. Under the
+    // no_edges control the edge layer contributes nothing at all.
+    edgeMat.uniforms.uOpacity.value = refValue.current > 0 ? 0.13 : 0;
+    trailMat.uniforms.uPixelRatio.value = pr;
+    trailMat.uniforms.uViewHeight.value = viewHeight;
+    trailMat.uniforms.uAlpha.value = refValue.current > 0 ? 0.85 : 0;
     staticMat.uniforms.uGlobal.value = 0.8 + 0.5 * frame.stateRms;
     liveMat.uniforms.uPixelRatio.value = pr;
     liveMat.uniforms.uViewHeight.value = viewHeight;
@@ -374,6 +531,8 @@ function Cloud({
   return (
     <>
       <points geometry={staticGeo} material={staticMat} frustumCulled={false} />
+      <lineSegments geometry={edgeGeo} material={edgeMat} frustumCulled={false} />
+      <points geometry={trailGeo} material={trailMat} frustumCulled={false} />
       <points geometry={liveGeo} material={liveMat} frustumCulled={false} />
     </>
   );
@@ -499,7 +658,8 @@ export function BrainCloud({
         position: 'relative',
         width: width ? `${width}px` : '100%',
         height: height ? `${height}px` : '100%',
-        background: '#04070d',
+        // Deep near-black HUD ground. The reference ground is #080C11.
+        background: '#080c11',
         overflow: 'hidden',
       }}
     >
@@ -510,6 +670,7 @@ export function BrainCloud({
         style={{ position: 'absolute', inset: 0 }}
       >
         <ResizeSync width={width} height={height} />
+        <color attach="background" args={['#080c11']} />
         {loaded ? (
           <Cloud
             layout={loaded}
@@ -520,6 +681,58 @@ export function BrainCloud({
           />
         ) : null}
       </Canvas>
+      {/*
+        The caption. Real figures only, and the note underneath is the honesty
+        clause: measured soma voxels, group centroid for the unannotated 27,038,
+        sampled edges. Styled as a wide-tracked uppercase label plus a value
+        line, which is how the reference broadcasts its numbers.
+      */}
+      <div
+        data-testid="connectome-caption"
+        style={{
+          position: 'absolute',
+          left: '1.1rem',
+          bottom: '0.95rem',
+          pointerEvents: 'none',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          textShadow: '0 1px 4px rgba(0,0,0,0.9)',
+        }}
+      >
+        <div
+          data-testid="connectome-caption-label"
+          style={{
+            fontSize: '0.58rem',
+            letterSpacing: '0.34em',
+            textTransform: 'uppercase',
+            color: '#6c8aa1',
+          }}
+        >
+          {CAPTION_LABEL}
+        </div>
+        <div
+          data-testid="connectome-caption-value"
+          style={{
+            marginTop: '0.3rem',
+            fontSize: '0.98rem',
+            letterSpacing: '0.04em',
+            color: '#d8eef6',
+          }}
+        >
+          {CAPTION_VALUE}
+        </div>
+        <div
+          data-testid="connectome-caption-note"
+          style={{
+            marginTop: '0.3rem',
+            maxWidth: '58ch',
+            fontSize: '0.6rem',
+            lineHeight: 1.45,
+            color: '#5e7a90',
+          }}
+        >
+          {CAPTION_NOTE}
+        </div>
+      </div>
       {!loaded ? (
         <div
           style={{

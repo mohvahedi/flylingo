@@ -17,8 +17,19 @@
  */
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { FlyStage } from './FlyStage';
+import { FlyStage, type StageStats } from './FlyStage';
 import { STATE_LEN, syntheticFrame } from './fly/regions';
+
+/**
+ * Viewer-only switches, read once from the query string. They exist so the headless check
+ * can hold the camera still and compare animation states against each other, and so it can
+ * measure the bloom pass separately from the scene.
+ *   ?frozen   no auto orbit: any pixel difference between two frames is the fly, not the camera
+ *   ?nobloom  skip the composer and render straight to the canvas
+ */
+const PARAMS = new URLSearchParams(window.location.search);
+const FROZEN_CAM = PARAMS.has('frozen');
+const BLOOM = !PARAMS.has('nobloom');
 
 const LIVE_MODES = ['intact', 'shuffled', 'no_edges', 'random_graph'] as const;
 type LiveMode = (typeof LIVE_MODES)[number];
@@ -47,9 +58,26 @@ function Demo() {
   const [choice, setChoice] = useState<Choice>('intact');
   const [correct, setCorrect] = useState<boolean | null>(null);
   const [frame, setFrame] = useState<Frame | null>(null);
+  const [stats, setStats] = useState<StageStats | null>(null);
 
-  /** null means "mount FlyStage with no props at all". */
+  // null means "mount FlyStage with no props at all".
   const liveMode: LiveMode | null = choice === 'none' ? null : choice;
+
+  /**
+   * StageStats go straight onto window, so the headless check can read the triangle and
+   * draw call census without the viewer having to re-render twice a second on its behalf.
+   */
+  const onStats = (s: StageStats) => {
+    (window as unknown as { __flyStats?: StageStats }).__flyStats = s;
+  };
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const s = (window as unknown as { __flyStats?: StageStats }).__flyStats;
+      if (s) setStats(s);
+    }, 700);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (choice === 'none') {
@@ -87,9 +115,12 @@ function Demo() {
           reward={correct ? 1 : 0}
           mode={liveMode}
           dev
+          bloom={BLOOM}
+          autoRotate={!FROZEN_CAM}
+          onStats={onStats}
         />
       ) : (
-        <FlyStage />
+        <FlyStage bloom={BLOOM} autoRotate={!FROZEN_CAM} onStats={onStats} />
       )}
 
       {/* standalone-only switcher, bottom right: the stage's own UI owns the top corners
@@ -152,6 +183,20 @@ function Demo() {
             </button>
           ))}
         </div>
+        {stats && (
+          <div
+            data-testid="fly-stats"
+            style={{ color: '#5f7186', fontSize: 10, lineHeight: 1.45, maxWidth: 230 }}
+          >
+            {`tris ${stats.triangles.toLocaleString()} | meshes ${stats.meshes}`}
+            <br />
+            {`setae ${stats.instances} | calls ${stats.drawCalls}`}
+            <br />
+            {`programs ${stats.programs} | geo ${stats.geometries} | tex ${stats.textures}`}
+            <br />
+            {`${BLOOM ? 'bloom on' : 'bloom off'} | ${FROZEN_CAM ? 'camera frozen' : 'auto orbit'}`}
+          </div>
+        )}
       </div>
     </div>
   );

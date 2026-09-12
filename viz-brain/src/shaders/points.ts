@@ -1,5 +1,8 @@
-// GLSL for the connectome cloud. Two programs: the full 166,700 point cloud and
-// the small live overlay that carries the 512 sampled state values.
+// GLSL for the connectome cloud. Four programs:
+//   1. the full 166,700 point cloud,
+//   2. the small live overlay that carries the 512 sampled state values,
+//   3. a sampled hairline edge set,
+//   4. the decaying trail of travelling activity pulses.
 //
 // AUTO-RANGING. Measured telemetry state is mostly small: median |state| is
 // 0.051, the 95th percentile is 0.274, max observed 0.717, state_rms 0.105.
@@ -12,6 +15,9 @@
 // The full cloud keeps a low ambient term from aBase (degree percentile) so the
 // anatomy stays legible when the brain is quiet, but that ambient term is
 // deliberately dim and carries no activity claim.
+//
+// PALETTE. Deep near-black background, nodes on a cyan to pale blue ramp
+// (#5BC8D6, #7FE0EA, #BFEFF7), amber (#F0A030) reserved for the newest spikes.
 
 export const STATIC_VERT = /* glsl */ `
 attribute float aBase;
@@ -64,8 +70,13 @@ void main() {
   float r2 = dot(d, d);
   if (r2 > 0.25) discard;
   float mask = smoothstep(0.25, 0.015, r2);
+  // A tight core sitting inside the soft disc. Round sprites with a bright
+  // centre are what give the cloud the long-exposure look of the reference
+  // rather than a flat scatter of equally lit dots.
+  float core = smoothstep(0.055, 0.0, r2);
   vec3 col = mix(uColorDim, uColorHot, pow(vAct, 0.6));
-  col = mix(col, uColorNeg, clamp(-vHot, 0.0, 1.0) * 0.55);
+  col = mix(col, uColorNeg, clamp(-vHot, 0.0, 1.0) * 0.5);
+  col += core * (0.16 + 0.5 * vAct) * (0.45 + 0.55 * vBase);
   // uAmbient carries the anatomy. It is scaled by degree percentile so dense
   // cells outline the shape, and it is driven to a small value on a dead frame
   // so an all-zero state renders dark instead of glowing.
@@ -116,13 +127,85 @@ void main() {
   float r2 = dot(d, d);
   if (r2 > 0.25) discard;
   float mask = smoothstep(0.25, 0.01, r2);
+  float core = smoothstep(0.055, 0.0, r2);
   vec3 base = vSign >= 0.0 ? uPos : uNeg;
+  // uShockColor is the amber. Only a live spike drives vShock, so amber never
+  // appears anywhere else in the picture.
   vec3 col = mix(base, uShockColor, clamp(vShock, 0.0, 1.0));
+  col += core * (0.22 + 0.45 * vAct + 0.75 * vShock);
   // A live slot with no activity and no spike is invisible, so a quiet brain
   // shows only its anatomy. A spike is drawn at full strength regardless of
   // how small the underlying state value was.
   float alpha = mask * clamp(0.15 + 1.1 * vAct + vShock, 0.0, 1.0);
   if (alpha < 0.02) discard;
   gl_FragColor = vec4(col, alpha);
+}
+`;
+
+// Hairline edges. WebGL draws lines one pixel wide, which is exactly the
+// reference look: a faint cyan mesh under the cloud, never a fat tube.
+export const EDGE_VERT = /* glsl */ `
+attribute float aWeight;
+varying float vWeight;
+void main() {
+  vWeight = aWeight;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+export const EDGE_FRAG = /* glsl */ `
+precision mediump float;
+uniform vec3 uColor;
+uniform float uOpacity;
+varying float vWeight;
+void main() {
+  float a = uOpacity * vWeight;
+  if (a < 0.002) discard;
+  gl_FragColor = vec4(uColor, a);
+}
+`;
+
+// Travelling pulses. Each dot is one spawn event: position along the pulse ray,
+// age in seconds, and the power the slot had when it spawned. Age drives size
+// and alpha down, so the tail is a real decay rather than a static streak.
+export const TRAIL_VERT = /* glsl */ `
+attribute float aAge;
+attribute float aPower;
+attribute vec3 aColor;
+uniform float uSize;
+uniform float uPixelRatio;
+uniform float uViewHeight;
+uniform float uLife;
+varying float vFade;
+varying vec3 vColor;
+void main() {
+  // 1.0 at spawn, 0.0 at uLife. Squaring makes the tail fall away quickly.
+  float f = clamp(1.0 - aAge / uLife, 0.0, 1.0);
+  vFade = f * f;
+  vColor = aColor;
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mv;
+  // Same viewport-relative pixel sizing as the cloud, so a trail dot is never
+  // sub-pixel, and it shrinks along the tail instead of vanishing at once.
+  float sizeScale = (0.35 + 1.05 * aPower) * (0.25 + 0.75 * f);
+  float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale;
+  gl_PointSize = clamp(px, 1.0, 20.0);
+}
+`;
+
+export const TRAIL_FRAG = /* glsl */ `
+precision mediump float;
+uniform float uAlpha;
+varying float vFade;
+varying vec3 vColor;
+void main() {
+  vec2 d = gl_PointCoord - 0.5;
+  float r2 = dot(d, d);
+  if (r2 > 0.25) discard;
+  float mask = smoothstep(0.25, 0.02, r2);
+  float core = smoothstep(0.055, 0.0, r2);
+  float a = uAlpha * vFade * mask;
+  if (a < 0.004) discard;
+  gl_FragColor = vec4(vColor + core * vFade * 0.45, a);
 }
 `;

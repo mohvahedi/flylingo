@@ -140,6 +140,12 @@ Without the brain service the page still renders and tells you the service is no
 with the exact command to start it. The lesson needs no account, database, or payment
 provider, which is why the clone's auth was removed for this route.
 
+**Restart the app after every rebuild.** `next start` caches its build manifest at boot, so a
+rebuild underneath a running server leaves it serving the old HTML against new hashed chunks.
+The symptom is a page stuck on its loading state plus a 404 on a chunk, which looks like a
+code bug and is not one. This cost real debugging time here: `/lesson/fly` appeared broken
+while the API was perfectly healthy. Build, then restart, then verify.
+
 The standalone harnesses run on their own, with synthetic idle animation and no backend:
 
 ```bash

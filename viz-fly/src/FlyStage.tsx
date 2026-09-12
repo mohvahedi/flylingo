@@ -9,17 +9,33 @@
  *
  * Rendering choices worth knowing about:
  *  - no external assets. Every mesh is procedural and every material is built here, so
- *    the stage works with no network at all (no HDR environment, no .glb, no fonts).
- *  - dark instrument look: one key light, one cool rim light, contact shadow only.
+ *    the stage works with no network at all (no HDR file, no .glb, no fonts). The
+ *    environment map is a room of emissive planes, baked at mount with PMREM.
+ *  - cinematic rig: a hard warm key from the upper right that is the only shadow caster and
+ *    sits low enough to throw a long cast shadow, a cool rim from behind, a low cool fill,
+ *    and a shallow ambient. See fly/studio.ts.
+ *  - the ground fades radially to true black, so there is no horizon and no plane edge.
+ *  - optional bloom (on by default) so the speculars and the connectome glow read as light.
  *  - UI is limited to the mode badge, an optional corner sparkline, and a dev strip that
  *    only appears when a frame is supplied and `dev` is not disabled.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { ContactShadows, OrbitControls } from '@react-three/drei';
+import * as THREE from 'three';
 import { Fly } from './fly/Fly';
 import { useAnimator } from './fly/animator';
 import { CHANNELS, modeLabel } from './fly/regions';
+import { groundMaterial } from './fly/materials';
+import { RIG, SHADOW_EXTENT, StudioEnvironment } from './fly/studio';
+import { Bloom } from './fly/Bloom';
 import type { Behavior, ReactionKind } from './fly/pose';
 import { ControlStrip } from './components/ControlStrip';
 import { Sparkline } from './components/Sparkline';
@@ -41,11 +57,101 @@ export type FlyStageProps = {
   dev?: boolean;
   /** render the corner stateRms sparkline. Default: true. */
   sparkline?: boolean;
+  /** bloom pass over the whole stage. On by default; off costs one prop. */
+  bloom?: boolean;
+  /** slow orbit for the hero shot. Turn off when the caller drives the camera. */
+  autoRotate?: boolean;
+  /** geometry and renderer census, sampled twice a second. Optional, no-op by default. */
+  onStats?: (stats: StageStats) => void;
   className?: string;
   style?: CSSProperties;
 };
 
+export type StageStats = {
+  /** triangles in the scene graph, counted once at mount (instances included) */
+  triangles: number;
+  meshes: number;
+  instances: number;
+  /** peak draw calls in a frame, from the renderer's own counters */
+  drawCalls: number;
+  programs: number;
+  geometries: number;
+  textures: number;
+};
+
 const SPARK_POINTS = 180;
+
+/**
+ * Reports what the scene actually costs.
+ *
+ * The renderer's counters are turned off auto-reset and cleared at the top of the frame by
+ * a negative priority subscriber, so they accumulate across every pass of the frame, bloom
+ * included, and are read back before the next frame renders. Reading them the naive way
+ * would only ever report the last pass of a composer chain.
+ */
+function StatsProbe({ onStats }: { onStats: (s: StageStats) => void }) {
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  const census = useRef<Pick<StageStats, 'triangles' | 'meshes' | 'instances'> | null>(null);
+  const peak = useRef(0);
+  const last = useRef(0);
+
+  useEffect(() => {
+    let triangles = 0;
+    let meshes = 0;
+    let instances = 0;
+    scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      const geo = mesh.geometry as THREE.BufferGeometry;
+      const index = geo.getIndex();
+      const position = geo.getAttribute('position');
+      const tris = index ? index.count / 3 : position ? position.count / 3 : 0;
+      const count = (mesh as THREE.InstancedMesh).isInstancedMesh
+        ? (mesh as THREE.InstancedMesh).count
+        : 1;
+      triangles += tris * count;
+      meshes += 1;
+      if (count > 1) instances += count;
+    });
+    census.current = {
+      triangles: Math.round(triangles),
+      meshes,
+      instances,
+    };
+  }, [scene]);
+
+  useEffect(() => {
+    const prev = gl.info.autoReset;
+    gl.info.autoReset = false;
+    return () => {
+      gl.info.autoReset = prev;
+    };
+  }, [gl]);
+
+  // runs before every other subscriber, so the counters only ever hold one frame of work
+  useFrame(() => {
+    gl.info.reset();
+  }, -50);
+
+  useFrame((state) => {
+    const calls = gl.info.render.calls;
+    if (calls > peak.current) peak.current = calls;
+    const t = state.clock.elapsedTime;
+    if (!census.current || t - last.current < 0.5) return;
+    last.current = t;
+    onStats({
+      ...census.current,
+      drawCalls: peak.current,
+      programs: gl.info.programs ? gl.info.programs.length : 0,
+      geometries: gl.info.memory.geometries,
+      textures: gl.info.memory.textures,
+    });
+    peak.current = 0;
+  });
+
+  return null;
+}
 
 /** Lightweight live state shared between the render loop and the React overlays. */
 type LiveRef = {
@@ -65,6 +171,9 @@ function Stage({
   reaction,
   history,
   live,
+  autoRotate,
+  bloom,
+  onStats,
 }: {
   activity?: number[];
   stateRms: number;
@@ -76,6 +185,9 @@ function Stage({
   reaction: { kind: ReactionKind; seq: number };
   history: number[];
   live: React.RefObject<LiveRef>;
+  autoRotate: boolean;
+  bloom: boolean;
+  onStats?: (stats: StageStats) => void;
 }) {
   const anim = useAnimator({
     activity: activity ?? null,
@@ -86,6 +198,10 @@ function Stage({
     paused,
     timeScale,
   });
+
+  // the floor is procedural too: one material, patched to fade radially to true black
+  const ground = useMemo(() => groundMaterial(7), []);
+  useEffect(() => () => ground.dispose(), [ground]);
 
   // publish the cheap bits for the overlays; the overlays poll a few times a second
   const lastPush = useRef(0);
@@ -123,30 +239,45 @@ function Stage({
 
   return (
     <>
-      <color attach="background" args={['#05070b']} />
-      <fog attach="fog" args={['#05070b', 6, 14]} />
+      <color attach="background" args={['#080c11']} />
 
-      {/* key light: warm white, the only shadow caster */}
+      {/* the studio: a room of emissive panels, PMREM baked once, applied at low
+          intensity. This is what gives the clearcoat and the eyes something to reflect
+          without lifting the background out of black. */}
+      <StudioEnvironment intensity={0.32} />
+
+      {/* key: hard and warm from the upper right. The only shadow caster, and low enough
+          (~25 degrees above the horizon) that the cast shadow runs long and to the left. */}
       <directionalLight
-        position={[3.2, 5.0, 2.6]}
-        intensity={2.4}
-        color="#fff4e6"
+        position={RIG.key.position}
+        intensity={RIG.key.intensity}
+        color={RIG.key.color}
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
         shadow-camera-near={0.5}
-        shadow-camera-far={16}
-        shadow-camera-left={-3}
-        shadow-camera-right={3}
-        shadow-camera-top={3}
-        shadow-camera-bottom={-3}
-        shadow-bias={-0.0012}
+        shadow-camera-far={18}
+        shadow-camera-left={-SHADOW_EXTENT}
+        shadow-camera-right={SHADOW_EXTENT}
+        shadow-camera-top={SHADOW_EXTENT}
+        shadow-camera-bottom={-SHADOW_EXTENT}
+        shadow-bias={-0.0006}
+        shadow-normalBias={0.02}
       />
-      {/* rim light: cool, from behind, separates the fly from the background */}
-      <directionalLight position={[-3.4, 2.2, -3.6]} intensity={2.1} color="#60a5fa" />
-      {/* instrument fill so nothing is ever pure black */}
-      <ambientLight intensity={0.22} color="#8fa6c4" />
-      <pointLight position={[0, 1.1, 1.9]} intensity={0.5} color="#bae6fd" distance={7} />
+      {/* rim: cool, from behind and a little left, separates the fly from the black */}
+      <directionalLight
+        position={RIG.rim.position}
+        intensity={RIG.rim.intensity}
+        color={RIG.rim.color}
+      />
+      {/* fill: low and cool from the lower left, catches the belly and the wing undersides */}
+      <directionalLight
+        position={RIG.fill.position}
+        intensity={RIG.fill.intensity}
+        color={RIG.fill.color}
+      />
+      {/* ambient: shallow on purpose. Anything brighter flattens the shadow side to grey. */}
+      <ambientLight intensity={RIG.ambient.intensity} color={RIG.ambient.color} />
       {/* reward accent: a warm under-glow that scales with the reward channel */}
       <pointLight
         position={[0, 0.5, 0.4]}
@@ -162,28 +293,29 @@ function Stage({
         slotOf={slotOf}
       />
 
-      {/* ground: a dark disc plus a scale ring, no texture, no clutter */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-        <circleGeometry args={[7, 64]} />
-        <meshStandardMaterial color="#080c12" roughness={0.94} metalness={0.04} />
+      {/* ground: one dark disc that fades to true black at the rim, so there is no plane
+          edge and no horizon, plus a scale ring, no texture, no clutter */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow material={ground}>
+        <circleGeometry args={[7, 96]} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.003, 0]}>
         <ringGeometry args={[1.55, 1.575, 96]} />
-        <meshBasicMaterial color="#22d3ee" transparent opacity={0.16} />
+        <meshBasicMaterial color="#22d3ee" transparent opacity={0.14} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.003, 0]}>
         <ringGeometry args={[2.6, 2.615, 96]} />
-        <meshBasicMaterial color="#38bdf8" transparent opacity={0.07} />
+        <meshBasicMaterial color="#38bdf8" transparent opacity={0.05} />
       </mesh>
 
-      {/* soft contact shadow instead of a hard shadow map alone */}
+      {/* soft contact shadow under the body, in addition to the real cast shadow: it is
+          what grounds the tarsi. Real shadow map above gives the long dramatic wedge. */}
       <ContactShadows
         position={[0, 0.004, 0]}
-        opacity={0.62}
+        opacity={0.55}
         scale={5}
-        blur={2.4}
-        far={2.2}
-        resolution={1024}
+        blur={2.6}
+        far={2.4}
+        resolution={512}
         color="#000814"
       />
 
@@ -194,12 +326,15 @@ function Stage({
         maxDistance={7}
         minPolarAngle={0.12}
         maxPolarAngle={Math.PI / 2.08}
-        autoRotate
+        autoRotate={autoRotate}
         autoRotateSpeed={0.42}
         enableDamping
         dampingFactor={0.06}
         target={[0, 0.5, 0]}
       />
+
+      {bloom && <Bloom />}
+      {onStats && <StatsProbe onStats={onStats} />}
     </>
   );
 }
@@ -215,6 +350,9 @@ export function FlyStage({
   height,
   dev,
   sparkline = true,
+  bloom = true,
+  autoRotate = true,
+  onStats,
   className,
   style,
 }: FlyStageProps) {
@@ -266,7 +404,7 @@ export function FlyStage({
     position: 'relative',
     width: width != null ? `${width}px` : '100%',
     height: height != null ? `${height}px` : '100%',
-    background: '#05070b',
+    background: '#080c11',
     overflow: 'hidden',
     ...style,
   };
@@ -279,7 +417,7 @@ export function FlyStage({
         gl={{ antialias: true, powerPreference: 'high-performance' }}
         camera={{ position: [1.85, 1.15, 2.35], fov: 32, near: 0.05, far: 60 }}
         onCreated={({ gl }) => {
-          gl.setClearColor('#05070b', 1);
+          gl.setClearColor('#080c11', 1);
         }}
       >
         <Stage
@@ -293,6 +431,9 @@ export function FlyStage({
           reaction={reaction}
           history={history}
           live={live}
+          autoRotate={autoRotate}
+          bloom={bloom}
+          onStats={onStats}
         />
       </Canvas>
 

@@ -39,6 +39,22 @@ export interface MetricsSnapshot {
   spikeCount: number;
   /** Per-point field bytes queued this frame. */
   fieldUploadBytes: number;
+  /** Drawn hairline edges. A sampled illustration, not measured adjacency. */
+  edgeCount: number;
+  /** Hubs the edge set was built from, real high in-degree neurons. */
+  edgeHubs: number;
+  /** Mean drawn edge length in world units. */
+  edgeMeanLength: number;
+  /** One line stating what the edges were actually derived from. */
+  edgeSource: string;
+  /** Live dots in the decaying trail buffer this frame. */
+  trailPoints: number;
+  /** Capacity of the trail buffer. */
+  trailCapacity: number;
+  /** Bytes the trail re-uploads per frame while it is not empty. */
+  trailUploadBytes: number;
+  /** The caption line rendered under the cloud. */
+  caption: string;
 }
 
 const FPS_WINDOW = 120;
@@ -108,6 +124,14 @@ export const metrics: MetricsSnapshot = {
   peakAbs: 0,
   spikeCount: 0,
   fieldUploadBytes: 0,
+  edgeCount: 0,
+  edgeHubs: 0,
+  edgeMeanLength: 0,
+  edgeSource: '',
+  trailPoints: 0,
+  trailCapacity: 0,
+  trailUploadBytes: 0,
+  caption: '',
 };
 
 export function updateFps(): void {

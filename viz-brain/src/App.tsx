@@ -30,6 +30,7 @@ import {
   type BrainLayout,
 } from './layout';
 import { buildLiveMapping } from './live/mapping';
+import { EDGE_HUBS, EDGE_RADIUS } from './layout/edges';
 import { DEFAULT_STREAM_URL } from './live/socket';
 import { metrics, publishMetrics } from './metrics/fps';
 import { ModeBadge } from './ui/ModeBadge';
@@ -174,7 +175,7 @@ export function App() {
         height: '100%',
         minHeight: '100%',
         color: '#cfe3f5',
-        background: '#04070d',
+        background: '#080c11',
       }}
     >
       <header
@@ -247,29 +248,6 @@ export function App() {
             </div>
           </div>
 
-          <div
-            style={{
-              position: 'absolute',
-              left: '0.8rem',
-              bottom: '0.7rem',
-              maxWidth: '64ch',
-              fontSize: '0.68rem',
-              color: '#7f98ad',
-              textShadow: '0 1px 3px rgba(0,0,0,0.85)',
-              pointerEvents: 'none',
-            }}
-          >
-            <div>
-              Auto range is the 95th percentile of |state| for the frame in view (measured p95 0.274).
-              A frame whose |state| is all zeros renders empty on purpose: under the no_edges control
-              every value is exactly 0.0 and spikes is exactly [], so an empty cloud is a real
-              measurement, not a display failure.
-            </div>
-            <div style={{ marginTop: '0.2rem' }}>
-              Mode is a label for the connectivity behind the frame, not a magnitude cue: state_rms is
-              nearly identical across live modes ({MODE_RMS_NOTE}).
-            </div>
-          </div>
         </section>
 
         <aside
@@ -344,6 +322,29 @@ export function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ color: '#7f98ad' }}>active fraction</span>
               <span style={{ color: '#dceaf7' }}>{frame.activeFraction.toFixed(4)}</span>
+            </div>
+          </div>
+
+          <div style={{ fontSize: '0.68rem', color: '#7f98ad', lineHeight: 1.45 }}>
+            <div>
+              Auto range is the 95th percentile of |state| for the frame in view (measured p95 0.274).
+              A frame whose |state| is all zeros renders empty on purpose: under the no_edges control
+              every value is exactly 0.0 and spikes is exactly [], so an empty cloud is a real
+              measurement, not a display failure.
+            </div>
+            <div style={{ marginTop: '0.25rem' }}>
+              Mode is a label for the connectivity behind the frame, not a magnitude cue: state_rms is
+              nearly identical across live modes ({MODE_RMS_NOTE}).
+            </div>
+            <div style={{ marginTop: '0.25rem' }}>
+              Edges: the {EDGE_HUBS.toLocaleString()} highest in-degree hubs joined to their nearest
+              same-class somas within {EDGE_RADIUS} world units, over measured soma positions. A sampled
+              illustration, not measured adjacency. The real graph is 25,582,938 directed edges and is
+              not drawn.
+            </div>
+            <div style={{ marginTop: '0.25rem' }}>
+              Pulses: each active live slot sheds a decaying dotted trail along a fixed per-slot ray,
+              driven only by the real spikes and the real state values in the frame.
             </div>
           </div>
 
