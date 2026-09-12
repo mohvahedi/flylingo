@@ -34,7 +34,7 @@ const SPAWN_INTERVAL = 0.03;
 const TRAIL_SPEED = 0.6;
 const TRAIL_MAX_OFFSET = 0.24;
 const ACTIVITY_FLOOR = 0.42;
-const AMBER_SECONDS = 0.14;
+const AMBER_SECONDS = 0.22;
 const SPAWN_BUDGET = 96;
 
 /** World-space bias so trails stream off to one side, as in the reference. */

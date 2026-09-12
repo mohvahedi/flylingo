@@ -96,7 +96,9 @@ FPS_JS = """() => new Promise((res) => {
 
 
 def rgb(png: bytes) -> np.ndarray:
-    return np.asarray(Image.open(BytesIO(png)).convert('RGB'), dtype=np.int16)
+    # int32, not int16: the luma weights below multiply by 299/587 and silently wrap in
+    # int16, which reports a fully lit frame as near black.
+    return np.asarray(Image.open(BytesIO(png)).convert('RGB'), dtype=np.int32)
 
 
 def luma(a: np.ndarray) -> np.ndarray:
@@ -118,7 +120,7 @@ def visibility(png: bytes, bg=BG, lit=LIT) -> dict:
     """Is the fly actually there, and how much of the panel does it own."""
     a = rgb(png)
     h, w, _ = a.shape
-    dist = np.abs(a - np.array(bg, dtype=np.int16)).sum(axis=2)
+    dist = np.abs(a - np.array(bg, dtype=np.int32)).sum(axis=2)
     l = luma(a)
     mask = l > lit
     ys, xs = np.nonzero(mask)

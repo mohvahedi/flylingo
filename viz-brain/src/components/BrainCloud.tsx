@@ -21,6 +21,14 @@ import { createTrail, TRAIL_CAPACITY, TRAIL_LIFE, updateTrail } from '../live/tr
 
 const LIVE_SLOTS = 512;
 
+/**
+ * Wall-clock time constant of the amber spike flash. The old code decayed the
+ * flash by a fixed 0.72 per frame, which lasted about 170 ms at 60 fps and
+ * under a millisecond in an unthrottled headless run, so the amber was
+ * invisible to a screenshot. This is the time to fall to 1/e.
+ */
+const SPIKE_FLASH_SECONDS = 0.16;
+
 // ---------------------------------------------------------------------------
 // Caption figures. Every number here is measured and is quoted from
 // public/data/layout_meta.json: 166,700 retained MaleCNS v1.0 neurons,
@@ -153,7 +161,7 @@ function Cloud({
         vertexShader: STATIC_VERT,
         fragmentShader: STATIC_FRAG,
         uniforms: {
-          uSize: { value: 2.4 },
+          uSize: { value: 2.6 },
           uPixelRatio: { value: 1 },
           uViewHeight: { value: 600 },
           uGlobal: { value: 0.85 },
@@ -377,6 +385,17 @@ function Cloud({
     const hasIds = frame.sampledIds.length > 0;
 
     // ------------------------------------------------------------------
+    // Frame delta in seconds. Computed first because the amber spike flash
+    // and the pulse trail are both driven by real time, not by frames: a
+    // fixed per-frame decay makes the flash last about 170 ms at 60 fps
+    // and well under a millisecond in an unthrottled headless run.
+    // ------------------------------------------------------------------
+    const frameNow = performance.now();
+    const dtMs = lastFrameTime.current === 0 ? 16.7 : frameNow - lastFrameTime.current;
+    lastFrameTime.current = frameNow;
+    const dtSec = Math.min(0.05, Math.max(0.0005, dtMs / 1000));
+
+    // ------------------------------------------------------------------
     // Auto-range. Measured telemetry: median |state| 0.051, p95 0.274,
     // state_rms 0.105. A linear 0..1 map would be near black, so every
     // frame is normalised against its own 95th percentile. A dead frame
@@ -446,18 +465,16 @@ function Cloud({
         const live = s < nslots && (idx >= 0 || !hasIds);
         av[s] = live ? frame.state[s] : 0;
         sv[s] = live ? shockState.current[s] : 0;
-        if (shockState.current[s] > 0) shockState.current[s] *= 0.72;
+        // Real-time decay, so the amber flash lasts the same wall-clock
+        // time at 30 fps and at 300 fps.
+        if (shockState.current[s] > 0) {
+          shockState.current[s] *= Math.exp(-dtSec / SPIKE_FLASH_SECONDS);
+        }
         if (shockState.current[s] < 0.004) shockState.current[s] = 0;
       }
       aa.needsUpdate = true;
       sa.needsUpdate = true;
     }
-
-    // Frame delta in seconds, shared by the trail and the fps record below.
-    const frameNow = performance.now();
-    const dtMs = lastFrameTime.current === 0 ? 16.7 : frameNow - lastFrameTime.current;
-    lastFrameTime.current = frameNow;
-    const dtSec = Math.min(0.05, dtMs / 1000);
 
     // ------------------------------------------------------------------
     // Travelling pulses. Driven by the same real spikes and real state
@@ -494,11 +511,11 @@ function Cloud({
     // value has to be high enough to clear black on its own. Measured: at 0.55 with
     // a dark navy uColorDim the whole cloud landed near RGB(5,14,24) and the brain
     // was invisible. Driven near zero on a dead frame so no_edges looks genuinely dark.
-    staticMat.uniforms.uAmbient.value = refValue.current > 0 ? 0.75 : 0.06;
+    staticMat.uniforms.uAmbient.value = refValue.current > 0 ? 0.85 : 0.015;
     // The sampled edges are a display aid, not a claim about a dead frame, so
     // they follow the same activity gate as the ambient term. Under the
     // no_edges control the edge layer contributes nothing at all.
-    edgeMat.uniforms.uOpacity.value = refValue.current > 0 ? 0.13 : 0;
+    edgeMat.uniforms.uOpacity.value = refValue.current > 0 ? 0.17 : 0;
     trailMat.uniforms.uPixelRatio.value = pr;
     trailMat.uniforms.uViewHeight.value = viewHeight;
     trailMat.uniforms.uAlpha.value = refValue.current > 0 ? 0.85 : 0;
@@ -509,12 +526,9 @@ function Cloud({
 
     controlsRef.current?.update();
 
-    const now = performance.now();
-    const dt = lastFrameTime.current === 0 ? 16.7 : now - lastFrameTime.current;
-    lastFrameTime.current = now;
-    recordFrame(dt);
+    recordFrame(dtMs);
     metrics.frames += 1;
-    metrics.lastFrameMs = dt;
+    metrics.lastFrameMs = dtMs;
     updateFps();
     publishMetrics();
   });

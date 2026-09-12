@@ -97,6 +97,12 @@ export function App() {
     return raw === 'full' ? 'full' : 'subset';
   });
   const [streamEnabled] = useState(() => new URLSearchParams(window.location.search).get('stream') !== 'off');
+  /**
+   * Dev escape hatch: `?props=none` mounts BrainCloud with zero props, which
+   * is the synthetic idle path. It exists so the "renders with no props"
+   * requirement can be checked in a real browser instead of argued from code.
+   */
+  const [zeroProps] = useState(() => new URLSearchParams(window.location.search).get('props') === 'none');
   const [streamUrl] = useState(() => {
     const raw = new URLSearchParams(window.location.search).get('stream');
     if (raw === null || raw === 'off' || raw === 'on') return DEFAULT_STREAM_URL;
@@ -213,17 +219,21 @@ export function App() {
       </header>
 
       <main style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <section style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-          <BrainCloud
-            layout={layoutState.layout}
-            state={frame.state}
-            spikes={frame.spikes}
-            sampledIds={frame.sampledIds}
-            activeFraction={frame.activeFraction}
-            stateRms={frame.stateRms}
-            driveMode={driveMode}
-            inspectId={inspectId}
-          />
+        <section style={{ position: 'relative', flex: 1, minWidth: 0 }} data-testid="cloud-section">
+          {zeroProps ? (
+            <BrainCloud />
+          ) : (
+            <BrainCloud
+              layout={layoutState.layout}
+              state={frame.state}
+              spikes={frame.spikes}
+              sampledIds={frame.sampledIds}
+              activeFraction={frame.activeFraction}
+              stateRms={frame.stateRms}
+              driveMode={driveMode}
+              inspectId={inspectId}
+            />
+          )}
 
           <div
             style={{

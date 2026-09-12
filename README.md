@@ -214,3 +214,36 @@ path, whether the canvases are painting, and any console errors.
 One measurement note worth keeping: `e2e_viz.py` uses element screenshots rather than
 `readPixels`. react-three-fiber does not set `preserveDrawingBuffer`, so reading pixels
 outside a frame returns zeros and would report a working scene as black.
+
+## The specimen model
+
+`fly.glb` is a static mesh used under **CC-BY-4.0**, which requires attribution wherever it
+is displayed:
+
+| | |
+|---|---|
+| Title | Fly |
+| Author | victorberdugo1 (https://sketchfab.com/victorberdugo1) |
+| Source | https://sketchfab.com/3d-models/fly-6a4470f884554864827d848718b2b6bc |
+| Licence | CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/) |
+| File | 729,336 bytes, md5 `34f48c57967d2f839f0b235a03103375` |
+
+The credit is rendered in the HUD, both beside the specimen panel and in the attribution
+line. Removing the model must remove the credit with it.
+
+Inspected structure, since it matters for how it can be animated: 172 nodes, 57 meshes,
+7 materials, 9 embedded textures, 6,511 vertices, **no skin and no baked animation**. It is
+animated procedurally by driving its named nodes:
+
+| Group | Nodes | Used for |
+|---|---|---|
+| Wings | `FLYALI0`, `FLYALI`, `FLYALA0`, `FLYALA` | flutter and hold angle |
+| Legs | `FLYPAT33` to `FLYPAT40` and siblings (48 nodes, 6 legs of several segments) | walk cycle |
+| Eyes | `FLYOJO`, `FLYOJO0` | |
+| Head | `FLYCUL` | head turn, feeding gesture |
+| Body root | `FLYMAIN` | bob, sway, pitch, walk translation |
+
+The raw bounding box is about 4,765 x 5,767 x 3,527 units, so the mesh is roughly 6000x
+too large for a normal scene and is centred near `[319, -348, -511]`. Fit it at load time
+from its computed bounding box rather than hard-coding a scale, so replacing the asset does
+not silently break the framing.

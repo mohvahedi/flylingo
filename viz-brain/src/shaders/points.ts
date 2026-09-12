@@ -76,7 +76,7 @@ void main() {
   float core = smoothstep(0.055, 0.0, r2);
   vec3 col = mix(uColorDim, uColorHot, pow(vAct, 0.6));
   col = mix(col, uColorNeg, clamp(-vHot, 0.0, 1.0) * 0.5);
-  col += core * (0.16 + 0.5 * vAct) * (0.45 + 0.55 * vBase);
+  col += core * (0.2 + 0.55 * vAct) * (0.45 + 0.55 * vBase);
   // uAmbient carries the anatomy. It is scaled by degree percentile so dense
   // cells outline the shape, and it is driven to a small value on a dead frame
   // so an all-zero state renders dark instead of glowing.
@@ -129,15 +129,27 @@ void main() {
   float mask = smoothstep(0.25, 0.01, r2);
   float core = smoothstep(0.055, 0.0, r2);
   vec3 base = vSign >= 0.0 ? uPos : uNeg;
+  float shock = clamp(vShock, 0.0, 1.0);
   // uShockColor is the amber. Only a live spike drives vShock, so amber never
   // appears anywhere else in the picture.
-  vec3 col = mix(base, uShockColor, clamp(vShock, 0.0, 1.0));
-  col += core * (0.22 + 0.45 * vAct + 0.75 * vShock);
+  vec3 col = mix(base, uShockColor, shock);
+  col += core * (0.22 + 0.45 * vAct + 0.75 * shock);
   // A live slot with no activity and no spike is invisible, so a quiet brain
   // shows only its anatomy. A spike is drawn at full strength regardless of
   // how small the underlying state value was.
   float alpha = mask * clamp(0.15 + 1.1 * vAct + vShock, 0.0, 1.0);
   if (alpha < 0.02) discard;
+  // A fresh spike gets a ring at the edge of its (large) sprite. A spike pin
+  // lands on the brightest node in the frame, and additive amber on top of a
+  // bright cyan node blends straight to white, which is why the amber read as
+  // absent in an earlier attempt. The ring sits about 8 px out, where the cyan
+  // underneath is dim, so the amber survives; the centre is pulled back so the
+  // ring is what the eye catches.
+  if (shock > 0.02) {
+    float ring = smoothstep(0.14, 0.225, r2) * (1.0 - smoothstep(0.225, 0.25, r2));
+    col = mix(col, uShockColor * 1.18, ring);
+    alpha = max(alpha * (1.0 - 0.65 * ring), ring * shock);
+  }
   gl_FragColor = vec4(col, alpha);
 }
 `;
