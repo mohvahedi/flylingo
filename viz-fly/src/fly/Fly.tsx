@@ -7,10 +7,10 @@
  *
  *   root (rootY, rootZ, rootYaw)
  *     body (breathing Y, pitch, roll, yaw)
- *       thorax
- *       head -> eyes, antennae, proboscis
- *       abdomen -> 4 segments, chained, each with its own material
- *       leg x6 -> hip(yaw,roll) -> femur -> knee -> tibia -> tarsus
+ *       thorax -> setae
+ *       head -> eyes, ocelli, antennae (each with setae), proboscis
+ *       abdomen -> 4 segments, chained, each with its own material and its own setae
+ *       leg x6 -> hip(yaw,roll) -> femur(+setae) -> knee -> tibia -> tarsus
  *       wing x2 -> flap, sweep
  *       haltere x2
  *
@@ -22,21 +22,36 @@
  * The materials are also the only place the fly knows about magnitude: `live.vitality` is
  * already normalized in regions.ts against the measured p95 of |activity|, and is exactly
  * 0 for an all-zero frame, so nothing here can amplify a dead network into fake life.
+ *
+ * Look: the materials in materials.ts are physical (clearcoat, thin film iridescence,
+ * sheen) with a shader patch for cuticle microstructure. The emissive channel stays the
+ * instrument layer on top of a warm amber insect, so a hot frame glows and a dead frame is
+ * a lit but lifeless specimen.
  */
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { REGION_COLOR, type ChannelKind } from './regions';
 import { LEG_LEN, LEG_ROWS, legRow, legSide, type Pose } from './pose';
 import type { LiveReadout } from './animator';
+import {
+  chitinMaterial,
+  eyeMaterial,
+  setaeMaterial,
+  wingGeometry,
+  wingMaterial,
+} from './materials';
 
 /** Materials, one per visible part that carries a channel. */
 type FlyMats = {
-  head: THREE.MeshStandardMaterial;
-  thorax: THREE.MeshStandardMaterial;
-  abdomen: THREE.MeshStandardMaterial[];
-  legs: THREE.MeshStandardMaterial[];
-  wings: THREE.MeshStandardMaterial;
+  head: THREE.MeshPhysicalMaterial;
+  thorax: THREE.MeshPhysicalMaterial;
+  abdomen: THREE.MeshPhysicalMaterial[];
+  legs: THREE.MeshPhysicalMaterial[];
+  wings: THREE.MeshPhysicalMaterial;
+  eyes: THREE.MeshPhysicalMaterial;
+  gloss: THREE.MeshPhysicalMaterial;
+  setae: THREE.MeshPhysicalMaterial;
 };
 
 /** Signature used to find the channel index for a given region slot. */
@@ -58,41 +73,160 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 /** Base emissive intensity with no network at all. Deliberately dim but not black. */
 const BASE_GLOW = 0.1;
 
-function bodyMaterial(kind: ChannelKind, opts: { opacity?: number; rough: number; metal: number }) {
-  return new THREE.MeshStandardMaterial({
-    color: new THREE.Color(kind === 'legs' ? '#2b3440' : '#151b24'),
-    emissive: new THREE.Color(REGION_COLOR[kind]),
-    emissiveIntensity: BASE_GLOW,
-    roughness: opts.rough,
-    metalness: opts.metal,
-    transparent: (opts.opacity ?? 1) < 1,
-    opacity: opts.opacity ?? 1,
-  });
+/** Wing span and chord, shared by the geometry and the vein pattern. */
+const WING_LEN = 0.66;
+const WING_CHORD = 0.2;
+
+type FlyAssets = {
+  mats: FlyMats;
+  wingGeo: THREE.BufferGeometry;
+  setaeGeo: THREE.BufferGeometry;
+};
+
+function makeAssets(): FlyAssets {
+  const mats: FlyMats = {
+    head: chitinMaterial('head', 'head'),
+    thorax: chitinMaterial('thorax', 'thorax'),
+    abdomen: [0, 1, 2, 3].map(() => chitinMaterial('abdomen', 'abdomen')),
+    legs: [0, 1, 2, 3, 4, 5].map(() => chitinMaterial('legs', 'legs')),
+    wings: wingMaterial(WING_LEN, WING_CHORD),
+    // one facet frequency for the big compound eyes, a finer one for the small glossy
+    // parts (ocelli, antenna tips, proboscis labellum) so the facets stay the same size
+    // in world units instead of turning into moire on a 3 mm sphere
+    eyes: eyeMaterial(8.5),
+    gloss: eyeMaterial(26),
+    setae: setaeMaterial(),
+  };
+  const wingGeo = wingGeometry(WING_LEN, WING_CHORD);
+  // one unit height cone, reused by every setae instance and scaled per bristle
+  const setaeGeo = new THREE.ConeGeometry(0.0068, 1, 4, 1);
+  setaeGeo.translate(0, 0.5, 0);
+  return { mats, wingGeo, setaeGeo };
 }
 
-function makeMaterials(): FlyMats {
-  return {
-    head: bodyMaterial('head', { rough: 0.42, metal: 0.22 }),
-    thorax: bodyMaterial('thorax', { rough: 0.36, metal: 0.3 }),
-    abdomen: [0, 1, 2, 3].map(() => bodyMaterial('abdomen', { rough: 0.5, metal: 0.18 })),
-    legs: [0, 1, 2, 3, 4, 5].map(() => bodyMaterial('legs', { rough: 0.62, metal: 0.12 })),
-    wings: bodyMaterial('wings', { opacity: 0.34, rough: 0.08, metal: 0.0 }),
+function disposeAssets(a: FlyAssets) {
+  a.wingGeo.dispose();
+  a.setaeGeo.dispose();
+  Object.values(a.mats)
+    .flat()
+    .forEach((m) => m.dispose());
+}
+
+/* ------------------------------------------------------------------- setae */
+
+/** Deterministic LCG, so the same fly is generated on every mount and every machine. */
+function lcg(seed: number) {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
   };
 }
 
-/** Eye material: fixed deep red-brown, glossy. Real flies do not glow. */
-function makeEyeMaterial() {
-  return new THREE.MeshStandardMaterial({
-    color: new THREE.Color('#3d1216'),
-    emissive: new THREE.Color('#7f1d1d'),
-    emissiveIntensity: 0.16,
-    roughness: 0.24,
-    metalness: 0.42,
-  });
+export type SetaeProps = {
+  /** how many bristles */
+  count: number;
+  seed: number;
+  /** ellipsoid the bristles are sampled from, in the parent's frame */
+  cx: number;
+  cy: number;
+  cz: number;
+  rx: number;
+  ry: number;
+  rz: number;
+  /**
+   * cos(theta) band to sample over, measured from the local +Y pole. [0.2, 1] is the top
+   * cap of a body part, [-1, 1] is all round a limb.
+   */
+  capLo: number;
+  capHi: number;
+  /** how far each bristle leans toward the tail (-z) */
+  sweep: number;
+  /** bristle length in world units */
+  length: number;
+  /** per bristle length jitter, 0..1 */
+  variance?: number;
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material;
+};
+
+/**
+ * Instanced bristles. Built once, never touched again: the matrices are baked in the
+ * parent's frame, so the setae on a femur ride the walk cycle for free and the ones on the
+ * thorax ride the breathing.
+ */
+export function Setae({
+  count,
+  seed,
+  cx,
+  cy,
+  cz,
+  rx,
+  ry,
+  rz,
+  capLo,
+  capHi,
+  sweep,
+  length,
+  variance = 0.6,
+  geometry,
+  material,
+}: SetaeProps) {
+  const mesh = useMemo(() => {
+    const m = new THREE.InstancedMesh(geometry, material, count);
+    m.castShadow = true;
+    // the instances are baked here, so the whole part's bounds are the part's bounds
+    m.frustumCulled = false;
+
+    const rnd = lcg(seed);
+    const pos = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const quat = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const mat4 = new THREE.Matrix4();
+
+    for (let i = 0; i < count; i += 1) {
+      const c = capLo + (capHi - capLo) * rnd();
+      const st = Math.sqrt(Math.max(0, 1 - c * c));
+      const ph = rnd() * Math.PI * 2;
+      const nx = st * Math.cos(ph);
+      const ny = c;
+      const nz = st * Math.sin(ph);
+
+      pos.set(cx + nx * rx, cy + ny * ry, cz + nz * rz);
+      // surface normal of the ellipsoid, then leaned towards the tail like real setae
+      dir.set(nx / rx, ny / ry, nz / rz).normalize();
+      dir.z -= sweep;
+      dir.normalize();
+
+      quat.setFromUnitVectors(up, dir);
+      scale.set(1, length * (1 - variance + rnd() * variance), 1);
+      mat4.compose(pos, quat, scale);
+      m.setMatrixAt(i, mat4);
+    }
+    m.instanceMatrix.needsUpdate = true;
+    m.computeBoundingSphere();
+    return m;
+  }, [count, seed, cx, cy, cz, rx, ry, rz, capLo, capHi, sweep, length, variance, geometry, material]);
+
+  return <primitive object={mesh} />;
 }
 
+/* --------------------------------------------------------------------- leg */
+
 /** One leg: hip (yaw/roll) -> femur -> knee -> tibia -> tarsus, all driven by the pose. */
-function Leg({ pose, i, mat }: { pose: Pose; i: number; mat: THREE.MeshStandardMaterial }) {
+function Leg({
+  pose,
+  i,
+  mat,
+  assets,
+}: {
+  pose: Pose;
+  i: number;
+  mat: THREE.MeshPhysicalMaterial;
+  assets: FlyAssets;
+}) {
   const row = LEG_ROWS[legRow(i)];
   const side = legSide(i);
   const hip = useRef<THREE.Group>(null);
@@ -110,22 +244,39 @@ function Leg({ pose, i, mat }: { pose: Pose; i: number; mat: THREE.MeshStandardM
     <group position={[row.x * side, row.y, row.z]}>
       <group ref={hip}>
         <mesh castShadow material={mat} position={[0, -0.02, 0]}>
-          <sphereGeometry args={[0.045, 10, 8]} />
+          <sphereGeometry args={[0.045, 12, 10]} />
         </mesh>
         <group ref={femur}>
           <mesh castShadow material={mat} position={[0, -LEG_LEN.femur / 2, 0]}>
-            <capsuleGeometry args={[0.028, LEG_LEN.femur - 0.056, 4, 8]} />
+            <capsuleGeometry args={[0.028, LEG_LEN.femur - 0.056, 4, 10]} />
           </mesh>
+          {/* setae ride the femur, so the walk cycle carries them */}
+          <Setae
+            count={11}
+            seed={9001 + i * 131}
+            cx={0}
+            cy={-LEG_LEN.femur * 0.5}
+            cz={0}
+            rx={0.028}
+            ry={LEG_LEN.femur * 0.45}
+            rz={0.028}
+            capLo={-1}
+            capHi={1}
+            sweep={0.55}
+            length={0.026}
+            geometry={assets.setaeGeo}
+            material={assets.mats.setae}
+          />
           <group ref={knee} position={[0, -LEG_LEN.femur, 0]}>
             <mesh castShadow material={mat} position={[0, -LEG_LEN.tibia / 2, 0]}>
-              <capsuleGeometry args={[0.022, LEG_LEN.tibia - 0.044, 4, 8]} />
+              <capsuleGeometry args={[0.022, LEG_LEN.tibia - 0.044, 4, 10]} />
             </mesh>
             <group position={[0, -LEG_LEN.tibia, 0]}>
               <mesh castShadow material={mat} position={[0, -LEG_LEN.tarsus / 2, 0]}>
-                <capsuleGeometry args={[0.016, LEG_LEN.tarsus - 0.032, 3, 6]} />
+                <capsuleGeometry args={[0.016, LEG_LEN.tarsus - 0.032, 3, 8]} />
               </mesh>
               <mesh castShadow material={mat} position={[0, -LEG_LEN.tarsus, 0]}>
-                <sphereGeometry args={[0.02, 8, 6]} />
+                <sphereGeometry args={[0.02, 10, 8]} />
               </mesh>
             </group>
           </group>
@@ -135,14 +286,19 @@ function Leg({ pose, i, mat }: { pose: Pose; i: number; mat: THREE.MeshStandardM
   );
 }
 
+/* --------------------------------------------------------------------- fly */
+
 export function Fly({ drive, pose, live, slotOf }: FlyProps) {
-  const mats = useMemo(makeMaterials, []);
-  const eyeMat = useMemo(makeEyeMaterial, []);
+  const assets = useMemo(makeAssets, []);
+  const { mats } = assets;
+  useEffect(() => () => disposeAssets(assets), [assets]);
 
   const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
   const head = useRef<THREE.Group>(null);
   const abd = useRef<(THREE.Group | null)[]>([]);
+  /** inner shell group per abdomen segment: the only children the jitter loop touches */
+  const abdShell = useRef<(THREE.Group | null)[]>([]);
   const antL = useRef<THREE.Group>(null);
   const antR = useRef<THREE.Group>(null);
   const prob = useRef<THREE.Group>(null);
@@ -206,7 +362,7 @@ export function Fly({ drive, pose, live, slotOf }: FlyProps) {
 
     const paint = (
       kind: ChannelKind,
-      m: THREE.MeshStandardMaterial,
+      m: THREE.MeshPhysicalMaterial,
       v: number,
       gain: number,
     ) => {
@@ -224,12 +380,15 @@ export function Fly({ drive, pose, live, slotOf }: FlyProps) {
       const dd = drive[slotOf('abdomen', s)] || 0;
       paint('abdomen', mats.abdomen[s], dd, 1.6);
       const g = abd.current[s];
-      if (!g) continue;
+      const shell = abdShell.current[s];
       const j = 0.012 * dd * Math.sin(pose.haltere * 0.11 + s * 1.7);
-      g.children.forEach((c, ci) => {
-        c.position.y = (ci === 0 ? 0 : 0.01) + j;
-        c.scale.setScalar(1 + 0.02 * dd * Math.cos(s * 2.1 + pose.haltere * 0.07));
-      });
+      // only the inner shell group is scaled, so the setae and the tergite ridge parented
+      // beside it (and the group's own pose scale below) are not stamped to 1 every frame
+      if (shell) {
+        shell.position.y = j;
+        shell.scale.setScalar(1 + 0.02 * dd * Math.cos(s * 2.1 + pose.haltere * 0.07));
+      }
+      if (!g) continue;
       const k = pose.abdScale[s];
       g.scale.set(1 + (k - 1) * 0.35 + j, k + j * 0.5, 1 + (k - 1) * 0.35 + j);
     }
@@ -251,7 +410,9 @@ export function Fly({ drive, pose, live, slotOf }: FlyProps) {
 
     // eyes take only a little of the head channel: they are specular, not a light source
     const headGlow = drive[slotOf('head', 0)] || 0;
-    eyeMat.emissiveIntensity = 0.1 + 0.45 * headGlow + 0.7 * hit * (pose.reactionTint >= 0 ? 1 : 0.35);
+    const eyeGlow = 0.1 + 0.45 * headGlow + 0.7 * hit * (pose.reactionTint >= 0 ? 1 : 0.35);
+    mats.eyes.emissiveIntensity = eyeGlow;
+    mats.gloss.emissiveIntensity = eyeGlow;
   });
 
   const abdSegments = [
@@ -272,71 +433,104 @@ export function Fly({ drive, pose, live, slotOf }: FlyProps) {
           position={[0, 0.02, 0.06]}
           scale={[0.3, 0.26, 0.38]}
         >
-          <sphereGeometry args={[1, 28, 20]} />
+          <sphereGeometry args={[1, 32, 24]} />
         </mesh>
         {/* scutellum bump */}
         <mesh castShadow material={mats.thorax} position={[0, 0.1, -0.2]} scale={[0.19, 0.13, 0.16]}>
-          <sphereGeometry args={[1, 20, 14]} />
+          <sphereGeometry args={[1, 24, 16]} />
         </mesh>
+        {/* dorsal setae: densest on the thorax, and they cross the silhouette */}
+        <Setae
+          count={88}
+          seed={2311}
+          cx={0}
+          cy={0.02}
+          cz={0.06}
+          rx={0.3}
+          ry={0.26}
+          rz={0.38}
+          capLo={0.18}
+          capHi={1}
+          sweep={0.7}
+          length={0.046}
+          geometry={assets.setaeGeo}
+          material={mats.setae}
+        />
 
         {/* head */}
         <group ref={head} position={[0, 0.06, 0.38]}>
           <mesh castShadow material={mats.head} scale={[0.21, 0.19, 0.19]}>
-            <sphereGeometry args={[1, 26, 20]} />
+            <sphereGeometry args={[1, 30, 22]} />
           </mesh>
+          <Setae
+            count={44}
+            seed={7717}
+            cx={0}
+            cy={0}
+            cz={0}
+            rx={0.21}
+            ry={0.19}
+            rz={0.19}
+            capLo={0.05}
+            capHi={1}
+            sweep={0.55}
+            length={0.034}
+            geometry={assets.setaeGeo}
+            material={mats.setae}
+          />
           {/* compound eyes: the biggest single visual cue that this is a fly */}
           <mesh
-            material={eyeMat}
+            material={mats.eyes}
             position={[0.12, 0.02, 0.05]}
             rotation={[0, 0.34, -0.18]}
             scale={[0.1, 0.13, 0.12]}
           >
-            <sphereGeometry args={[1, 22, 16]} />
+            <sphereGeometry args={[1, 32, 24]} />
           </mesh>
           <mesh
-            material={eyeMat}
+            material={mats.eyes}
             position={[-0.12, 0.02, 0.05]}
             rotation={[0, -0.34, 0.18]}
             scale={[0.1, 0.13, 0.12]}
           >
-            <sphereGeometry args={[1, 22, 16]} />
+            <sphereGeometry args={[1, 32, 24]} />
           </mesh>
           {/* ocelli */}
-          <mesh material={eyeMat} position={[0, 0.11, 0.11]} scale={[0.035, 0.035, 0.035]}>
-            <sphereGeometry args={[1, 10, 8]} />
+          <mesh material={mats.gloss} position={[0, 0.11, 0.11]} scale={[0.035, 0.035, 0.035]}>
+            <sphereGeometry args={[1, 14, 12]} />
           </mesh>
 
           {/* antennae: 3 segments, tip brighter, twitching constantly */}
           <group ref={antL} position={[0.09, 0.09, 0.1]}>
             <mesh material={mats.head} position={[0.03, 0.09, 0.03]} rotation={[0, 0, -0.5]}>
-              <capsuleGeometry args={[0.014, 0.14, 3, 6]} />
+              <capsuleGeometry args={[0.014, 0.14, 4, 8]} />
             </mesh>
             <mesh material={mats.head} position={[0.11, 0.17, 0.05]} rotation={[0, 0, -1.2]}>
-              <capsuleGeometry args={[0.011, 0.12, 3, 6]} />
+              <capsuleGeometry args={[0.011, 0.12, 4, 8]} />
             </mesh>
-            <mesh material={eyeMat} position={[0.19, 0.19, 0.06]}>
-              <sphereGeometry args={[0.034, 12, 10]} />
+            <mesh material={mats.gloss} position={[0.19, 0.19, 0.06]}>
+              <sphereGeometry args={[0.034, 14, 12]} />
             </mesh>
           </group>
           <group ref={antR} position={[-0.09, 0.09, 0.1]}>
             <mesh material={mats.head} position={[-0.03, 0.09, 0.03]} rotation={[0, 0, 0.5]}>
-              <capsuleGeometry args={[0.014, 0.14, 3, 6]} />
+              <capsuleGeometry args={[0.014, 0.14, 4, 8]} />
             </mesh>
             <mesh material={mats.head} position={[-0.11, 0.17, 0.05]} rotation={[0, 0, 1.2]}>
-              <capsuleGeometry args={[0.011, 0.12, 3, 6]} />
+              <capsuleGeometry args={[0.011, 0.12, 4, 8]} />
             </mesh>
-            <mesh material={eyeMat} position={[-0.19, 0.19, 0.06]}>
-              <sphereGeometry args={[0.034, 12, 10]} />
+            <mesh material={mats.gloss} position={[-0.19, 0.19, 0.06]}>
+              <sphereGeometry args={[0.034, 14, 12]} />
             </mesh>
           </group>
 
           {/* proboscis: drumstick of coils, hidden entirely when retracted */}
           <group ref={prob} position={[0, -0.1, 0.1]}>
             <mesh castShadow material={mats.head} position={[0, -0.08, 0.02]}>
-              <capsuleGeometry args={[0.032, 0.16, 4, 10]} />
+              <capsuleGeometry args={[0.032, 0.16, 4, 12]} />
             </mesh>
-            <mesh material={eyeMat} position={[0, -0.2, 0.05]} scale={[0.06, 0.05, 0.06]}>
-              <sphereGeometry args={[1, 12, 10]} />
+            <mesh material={mats.gloss} position={[0, -0.2, 0.05]} scale={[0.06, 0.05, 0.06]}>
+              <sphereGeometry args={[1, 16, 12]} />
             </mesh>
           </group>
         </group>
@@ -350,46 +544,79 @@ export function Fly({ drive, pose, live, slotOf }: FlyProps) {
             }}
             position={s.pos as unknown as [number, number, number]}
           >
-            <mesh
-              castShadow
-              receiveShadow
-              material={mats.abdomen[i]}
-              scale={[s.r, s.r * 0.92, s.r * 1.15]}
+            <group
+              ref={(el) => {
+                abdShell.current[i] = el;
+              }}
             >
-              <sphereGeometry args={[1, 20, 16]} />
-            </mesh>
-            <mesh castShadow material={mats.abdomen[i]} scale={[s.r * 0.82, s.r * 0.7, s.r * 0.7]}>
-              <sphereGeometry args={[1, 16, 12]} />
-            </mesh>
+              <mesh
+                castShadow
+                receiveShadow
+                material={mats.abdomen[i]}
+                scale={[s.r, s.r * 0.92, s.r * 1.15]}
+              >
+                <sphereGeometry args={[1, 28, 20]} />
+              </mesh>
+              <mesh castShadow material={mats.abdomen[i]} scale={[s.r * 0.82, s.r * 0.7, s.r * 0.7]}>
+                <sphereGeometry args={[1, 20, 16]} />
+              </mesh>
+            </group>
+            {/* the tergite grooves themselves are drawn by the shader band term; these
+                are the setae that make each plate edge read as an edge */}
+            <Setae
+              count={15}
+              seed={4400 + i * 977}
+              cx={0}
+              cy={0}
+              cz={0}
+              rx={s.r}
+              ry={s.r * 0.92}
+              rz={s.r * 1.15}
+              capLo={0.05}
+              capHi={1}
+              sweep={0.7}
+              length={0.03}
+              geometry={assets.setaeGeo}
+              material={mats.setae}
+            />
           </group>
         ))}
 
         {/* all six legs, each its own hip/femur/knee chain and its own material */}
         {[0, 1, 2, 3, 4, 5].map((i) => (
-          <Leg key={i} i={i} pose={pose} mat={mats.legs[i]} />
+          <Leg key={i} i={i} pose={pose} mat={mats.legs[i]} assets={assets} />
         ))}
 
-        {/* wings: flat translucent blades, pivot at the thorax shoulder */}
+        {/* wings: real outlines with a veined translucent membrane, pivot at the shoulder */}
         <group ref={wingL} position={[0.14, 0.2, 0.02]}>
-          <mesh material={mats.wings} position={[0.42, 0, -0.06]} rotation={[Math.PI / 2, 0, 0.14]}>
-            <circleGeometry args={[0.46, 3]} />
-          </mesh>
+          <mesh
+            material={mats.wings}
+            geometry={assets.wingGeo}
+            position={[0.02, 0, -0.02]}
+            rotation={[Math.PI / 2, 0, -0.16]}
+          />
         </group>
         <group ref={wingR} position={[-0.14, 0.2, 0.02]}>
-          <mesh material={mats.wings} position={[-0.42, 0, -0.06]} rotation={[Math.PI / 2, 0, -0.14]}>
-            <circleGeometry args={[0.46, 3]} />
-          </mesh>
+          {/* mirrored through negative x scale; the membrane is DoubleSide so the flipped
+              winding is harmless and both faces light correctly */}
+          <mesh
+            material={mats.wings}
+            geometry={assets.wingGeo}
+            position={[-0.02, 0, -0.02]}
+            scale={[-1, 1, 1]}
+            rotation={[Math.PI / 2, 0, 0.16]}
+          />
         </group>
 
         {/* halteres: tiny gyroscopes behind the wings, and they genuinely beat */}
         <group ref={halL} position={[0.07, 0.06, -0.14]}>
           <mesh material={mats.wings} position={[0.05, 0, 0]}>
-            <capsuleGeometry args={[0.008, 0.07, 2, 5]} />
+            <capsuleGeometry args={[0.008, 0.07, 3, 6]} />
           </mesh>
         </group>
         <group ref={halR} position={[-0.07, 0.06, -0.14]}>
           <mesh material={mats.wings} position={[-0.05, 0, 0]}>
-            <capsuleGeometry args={[0.008, 0.07, 2, 5]} />
+            <capsuleGeometry args={[0.008, 0.07, 3, 6]} />
           </mesh>
         </group>
       </group>

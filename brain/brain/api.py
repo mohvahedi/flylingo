@@ -178,6 +178,33 @@ def _boot() -> None:
     )
 
 
+def _decision_features(ch: dict) -> np.ndarray:
+    """The feature vector the readout decides on. ONE definition, used everywhere.
+
+    The answer path and the streamed probabilities must agree, or the UI shows
+    probabilities that do not correspond to the choice the fly actually makes. They
+    diverged once: the tick loop refreshed `probs` from its own drifting drive while
+    answering used the challenge embedding, so a trained readout displayed near-uniform
+    probabilities next to confident answers.
+    """
+    if STATE.get("readout_kind") == "prompt_index":
+        # Trained on features of the PROMPT alone.
+        dr = STATE["decision_reservoir"]
+        dr.reset()
+        return dr.step(encode_text(ch["prompt"]))
+    return STATE["reservoir"].step(encode_challenge(ch))
+
+
+def _refresh_probs(ch: dict | None = None) -> None:
+    """Recompute the displayed probabilities for the current challenge."""
+    ch = ch if ch is not None else STATE.get("challenge")
+    if ch is None:
+        return
+    f = _decision_features(ch)
+    STATE["last_features"] = f
+    STATE["probs"] = STATE["adapter"].probs(f)
+
+
 def _tick_loop() -> None:
     """Step the connectome continuously so the live view is actually live.
 
@@ -185,6 +212,9 @@ def _tick_loop() -> None:
     daemon thread rather than in the event loop, and every access to the reservoir and
     the adapter is taken under STATE['lock'] so an answer can never interleave with a
     tick and read a half-updated state.
+
+    This drives the VISUALIZATION only. Probabilities are refreshed at challenge
+    boundaries instead, so what is displayed always matches what the readout decides.
     """
     while True:
         time.sleep(TICK_INTERVAL)
@@ -195,10 +225,7 @@ def _tick_loop() -> None:
             with STATE["lock"]:
                 r = STATE["reservoir"]
                 tick = STATE.get("ticks", 0)
-                f = r.step(tick_embedding(ch, tick))
-                STATE["last_features"] = f
-                if STATE.get("session") is not None:
-                    STATE["probs"] = STATE["adapter"].probs(f)
+                r.step(tick_embedding(ch, tick))
                 STATE["ticks"] = tick + 1
         except Exception:
             # A failed tick must never kill the process; the next one will retry.
@@ -356,11 +383,7 @@ def start_session(req: StartReq) -> dict:
     # Carry neural state across the lesson so the activity you watch is a continuous
     # trajectory, not a fresh look at each question. Reset at lesson start only.
     r.reset()
-    emb = encode_challenge(challenges[0])
-    f = r.step(emb)
-    p = STATE["adapter"].probs(f)
-    STATE["probs"] = p
-    STATE["last_features"] = f
+    _refresh_probs(challenges[0])
     STATE["last_chosen"] = None
     return {
         "session_id": sid,
@@ -392,13 +415,7 @@ def answer(req: AnswerReq) -> dict:
     # between the step and the reward assignment, which would associate the reward with the
     # wrong state.
     with lock:
-        if STATE.get("readout_kind") == "prompt_index":
-            # Features of the PROMPT, which is what the prompt-index readout was trained on.
-            dr = STATE["decision_reservoir"]
-            dr.reset()
-            f = dr.step(encode_text(ch["prompt"]))
-        else:
-            f = r.step(encode_challenge(ch))
+        f = _decision_features(ch)
         action, logprob = adapter.sample(f, STATE["rng"])
         probs = adapter.probs(f)
 
@@ -457,6 +474,11 @@ def answer(req: AnswerReq) -> dict:
     else:
         nxt = ch
     STATE["challenge"] = nxt
+    if nxt is not None:
+        # The displayed probabilities must belong to the challenge now on screen.
+        with lock:
+            _refresh_probs(nxt)
+            STATE["last_chosen"] = None
 
     return {
         "correct": bool(correct),
@@ -504,10 +526,7 @@ def control(req: ControlReq) -> dict:
     if ch is not None:
         with STATE["lock"]:
             r.reset()
-            f = r.step(encode_challenge(ch))
-            STATE["last_features"] = f
-            if STATE.get("session") is not None:
-                STATE["probs"] = STATE["adapter"].probs(f)
+            _refresh_probs(ch)
             STATE["last_chosen"] = None
             reapplied = True
 
