@@ -1,0 +1,27 @@
+[project]
+name = "flylingo-brain"
+version = "0.1.0"
+description = "MaleCNS fruit-fly connectome driving a Duolingo-style Spanish lesson, with live telemetry."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "pyarrow>=18.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "websockets>=13.0",
+    "torch>=2.5",
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+# This is an application, not a library: do not try to install it, just its deps.
+# `brain/` on sys.path makes `import brain...` resolve to the package directory.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

@@ -1,0 +1,13 @@
+# Large build inputs and derived data: reproducible from build_graph_from_reference.py
+cache/
+# Dependencies and build output
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Local runtime state, checkpoints and logs
+brain/runs/**/_smoke.json
+artifacts/
+*_real_run.log

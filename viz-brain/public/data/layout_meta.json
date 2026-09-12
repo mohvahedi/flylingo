@@ -1,0 +1,107 @@
+{
+  "dataset": "MaleCNS v1.0",
+  "count": 166700,
+  "edges": 25582938,
+  "coordinateSource": "real soma voxel coordinates",
+  "coordinateNote": "measured soma voxel coordinates from MaleCNS annotations.feather (somaLocation), centred and uniformly scaled to world units",
+  "coordinateField": "somaLocation",
+  "accuracy": {
+    "neuronsWithSomaAnnotation": 139662,
+    "neuronsFilledFromGroupCentroid": 27038,
+    "matchingRule": "centroid of (class, in-degree decile) group"
+  },
+  "degreeSource": "malecns in-degree from CSR indptr diff (row = postsynaptic)",
+  "classSource": "malecns superclass, collapsed into 4 layout classes",
+  "classTable": [
+    "optic_lobe",
+    "central_brain",
+    "ascending_descending",
+    "other"
+  ],
+  "classMapping": {
+    "ascending_neuron": 2,
+    "cb_efferent": 1,
+    "cb_endocrine": 1,
+    "cb_intrinsic": 1,
+    "cb_motor": 1,
+    "cb_sensory": 1,
+    "cb_sensory_tbc": 1,
+    "descending_neuron": 2,
+    "descending_neuron_tbc": 2,
+    "efferent_ascending": 2,
+    "efferent_descending": 2,
+    "ol_intrinsic": 0,
+    "ol_sensory": 0,
+    "sensory_ascending": 2,
+    "sensory_ascending_tbc": 2,
+    "sensory_descending": 2,
+    "visual_centrifugal": 1,
+    "visual_projection": 1,
+    "visual_projection_tbc": 1
+  },
+  "rawCentre": [
+    48901.65234375,
+    33176.8515625,
+    40215.74609375
+  ],
+  "uniformScale": 1.5884264272213104e-05,
+  "sources": {
+    "ids_npy": "ab90597b7b0ce07cbc22cb39a65b70bea2ac73cc7fd225951bd9d73f2fc8dd3f",
+    "indptr_npy": "2efdd6bcfd538d4a58ff381246075f6d1315417c54c38f39a75ad4386f4b689c",
+    "annotations_feather": "2177e246113e4cfbf1e7772ec37c6da1955ff22e8063d0b1f833101f99a9a3b2"
+  },
+  "upstreamManifest": {
+    "release": "MaleCNS v1.0",
+    "neurons": 166700,
+    "directed_edges": 25582938,
+    "synaptic_contacts": 124177617,
+    "raw_edge_rows": 151856684,
+    "retention": "Annotated nonempty superclass, excluding status Glia; both endpoints retained.",
+    "matrix_orientation": "row=postsynaptic; column=presynaptic",
+    "weights": "Unsigned contact counts, divided by total incoming contacts per neuron.",
+    "biological_dynamics": false,
+    "source_files": {
+      "annotations.feather": {
+        "url": "https://storage.googleapis.com/flyem-male-cns/v1.0/connectome-data/flat-connectome/body-annotations-male-cns-v1.0-minconf-0.5.feather",
+        "sha256": "2177e246113e4cfbf1e7772ec37c6da1955ff22e8063d0b1f833101f99a9a3b2"
+      },
+      "edges.feather": {
+        "url": "https://storage.googleapis.com/flyem-male-cns/v1.0/connectome-data/flat-connectome/connectome-weights-male-cns-v1.0-minconf-0.5.feather",
+        "sha256": "e35da783d1c686b2b58b3b87cd6a403ae43bfcfba8bff28e08ef752c1a56afc1"
+      }
+    },
+    "arrays": {
+      "data.npy": "7acb4f7cedf72c0065bf310d3e5a1e7afa49782a6001ccba44a3582ed1fdd5e9",
+      "ids.npy": "ab90597b7b0ce07cbc22cb39a65b70bea2ac73cc7fd225951bd9d73f2fc8dd3f",
+      "indices.npy": "917e8d715e4075ea11f785d3568b13c3f4f29030e91241399d232c85f4188851",
+      "indptr.npy": "2efdd6bcfd538d4a58ff381246075f6d1315417c54c38f39a75ad4386f4b689c"
+    }
+  },
+  "files": {
+    "soma_positions.f32": {
+      "dtype": "float32",
+      "shape": [
+        166700,
+        3
+      ]
+    },
+    "in_degree.u32": {
+      "dtype": "uint32",
+      "shape": [
+        166700
+      ]
+    },
+    "class_index.u8": {
+      "dtype": "uint8",
+      "shape": [
+        166700
+      ]
+    },
+    "neuron_ids.u32": {
+      "dtype": "uint32",
+      "shape": [
+        166700
+      ]
+    }
+  }
+}
