@@ -386,14 +386,20 @@ function Stage({
       {/* ground: one dark disc that fades to true black at the rim, so there is no plane
           edge and no horizon, plus a scale ring, no texture, no clutter. It receives the
           key light's shadow, which is the long wedge that puts the fly in the space. */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow material={ground}>
+      <mesh
+        name="ground"
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, 0, 0]}
+        receiveShadow
+        material={ground}
+      >
         <circleGeometry args={[7, 96]} />
       </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]} name="ring-inner">
         <ringGeometry args={[1.55, 1.575, 96]} />
         <meshBasicMaterial color="#22d3ee" transparent opacity={0.14} />
       </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.006, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.006, 0]} name="ring-outer">
         <ringGeometry args={[2.6, 2.615, 96]} />
         <meshBasicMaterial color="#38bdf8" transparent opacity={0.05} />
       </mesh>
@@ -429,8 +435,26 @@ function Stage({
 
       {bloom && <Bloom />}
       {onStats && <StatsProbe onStats={onStats} />}
+      <SceneProbe />
     </>
   );
+}
+
+/**
+ * Publishes the three scene on window so a headless probe can hide one piece of the rig at
+ * a time and measure what is left (for example: how much of the frame the ground actually
+ * occupies, with the fly hidden). One effect, no per-frame cost.
+ */
+function SceneProbe() {
+  const scene = useThree((s) => s.scene);
+  useEffect(() => {
+    const w = window as unknown as { __flyScene?: THREE.Scene };
+    w.__flyScene = scene;
+    return () => {
+      delete w.__flyScene;
+    };
+  }, [scene]);
+  return null;
 }
 
 export function FlyStage({
