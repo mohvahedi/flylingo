@@ -4,7 +4,9 @@ This is the check that matters for the project's central claim: the app must nev
 let a viewer mistake a control condition for the intact connectome, and the no_edges
 control must visibly produce an inert brain rather than a plausible-looking one.
 
-Requires the API on 127.0.0.1:8770 and the Next app on 127.0.0.1:3100.
+Requires the API and the Next app. Ports resolve via tools/flylingo_env.py, because
+Windows re-randomises its Hyper-V excluded port ranges on every boot and a hardcoded
+port can become unbindable without warning.
 """
 import json
 import urllib.request
@@ -12,8 +14,11 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from flylingo_env import app_url
+
 API = "http://127.0.0.1:8770"
-APP = "http://127.0.0.1:3100/lesson/fly"
+APP = app_url("/lesson/fly")
 OUT = Path(r"D:\Projects\flylingo\artifacts")
 OUT.mkdir(parents=True, exist_ok=True)
 

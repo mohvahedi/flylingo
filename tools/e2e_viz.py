@@ -3,13 +3,16 @@
 Uses element screenshots rather than WebGL readPixels: react-three-fiber does not set
 preserveDrawingBuffer, so an out-of-frame readPixels returns zeros and proves nothing.
 
-Requires the API on 127.0.0.1:8770 and the Next app on 127.0.0.1:3100.
+Requires the API and the Next app. Ports resolve via tools/flylingo_env.py.
 """
 import io
 from pathlib import Path
 
 from PIL import Image
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from flylingo_env import app_url
 
 OUT = Path(r"D:\Projects\flylingo\artifacts")
 OUT.mkdir(parents=True, exist_ok=True)
@@ -45,7 +48,7 @@ with sync_playwright() as p:
 
     # ---------- 1. the fly, in the lesson panel ----------
     print("=== LESSON: 3D fly ===")
-    page.goto("http://127.0.0.1:3100/lesson/fly", wait_until="domcontentloaded")
+    page.goto(app_url("/lesson/fly"), wait_until="domcontentloaded")
     page.wait_for_timeout(13000)
     stage = page.locator("canvas").first
     a1 = stage.screenshot()
@@ -67,7 +70,7 @@ with sync_playwright() as p:
 
     # ---------- 2. the brain cloud, on its own route ----------
     print("\n=== BRAIN ROUTE: /lesson/fly/brain ===")
-    page.goto("http://127.0.0.1:3100/lesson/fly/brain", wait_until="domcontentloaded")
+    page.goto(app_url("/lesson/fly/brain"), wait_until="domcontentloaded")
     page.wait_for_timeout(16000)
     body = page.inner_text("body")
     print("  title:", page.title())

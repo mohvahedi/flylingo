@@ -9,7 +9,9 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-URL = "http://127.0.0.1:3100/lesson/fly"
+from flylingo_env import app_url
+
+URL = app_url("/lesson/fly")
 OUT = Path(r"D:\Projects\flylingo\artifacts")
 OUT.mkdir(parents=True, exist_ok=True)
 

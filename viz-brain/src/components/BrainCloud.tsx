@@ -87,6 +87,9 @@ const CAPTION_NOTE =
 const CAPTION_LEGEND =
   'cyan measured soma · dim cooler cyan interpolated centroid fill · amber fresh spike · ' +
   'node hue cell class, core brightness in-degree percentile';
+// The HUD variant. Same colours, stated in one line, because there the stage is scaled
+// down to fit 16:9 and the full legend becomes a grey smear over the cloud.
+const CAPTION_LEGEND_COMPACT = 'cyan measured soma · amber fresh spike';
 
 export interface BrainCloudProps {
   /** frame.state, -1..1, length 512 */
@@ -114,6 +117,22 @@ export interface BrainCloudProps {
   /** Called on every rendered frame with the shared metrics snapshot. */
   onMetrics?: (m: MetricsSnapshot) => void;
   inspectId?: string | null;
+  /**
+   * How much of the caption to draw inside the panel.
+   *
+   *  'full'    label, figures, the long honesty note and the legend. Correct for the
+   *            standalone harness, where the caption is the only place the provenance is
+   *            stated.
+   *  'compact' label, figures and the colour legend, with the long note moved into a
+   *            title tooltip. For the app HUD, where a fixed 16:9 frame scales the whole
+   *            stage down and a 0.6rem note becomes unreadable clutter over the cloud. The
+   *            HUD carries the same honesty statement in its always-visible footer, so the
+   *            information is not lost by hiding it here.
+   *  'none'    nothing. The caller is stating provenance itself.
+   *
+   * The figures themselves are never dropped in any mode: they are the measured facts.
+   */
+  caption?: 'full' | 'compact' | 'none';
 }
 
 /** Decide which cloud point each live slot sits on. */
@@ -775,6 +794,7 @@ export function BrainCloud({
   layout,
   driveMode = 'subset',
   inspectId = null,
+  caption = 'full',
 }: BrainCloudProps) {
   const [loaded, setLoaded] = useState<BrainLayout | null>(layout ?? null);
   const usingSynthetic = !state || state.length === 0;
@@ -890,73 +910,104 @@ export function BrainCloud({
         the honesty clause, and the legend says what the colours mean. Styled as
         a wide-tracked uppercase label plus a value line, which is how the
         reference broadcasts its numbers.
+
+        `caption` decides how much of this is drawn. 'full' is the standalone
+        harness. In the app HUD the stage is scaled down to fit 16:9, so a 0.6rem
+        note over the cloud turns into unreadable clutter, and the HUD's own
+        always-visible footer carries the same honesty statement; there the mode is
+        'compact', which keeps the figures and the legend and moves the long note
+        into a title tooltip. The figures are never dropped in any mode.
       */}
-      <div
-        data-testid="connectome-caption"
-        data-neurons={CONNECTOME_FACTS.neurons}
-        data-measured-soma-neurons={CONNECTOME_FACTS.measuredSomaNeurons}
-        data-centroid-fill-neurons={CONNECTOME_FACTS.centroidFilled}
-        data-distinct-positions={CONNECTOME_FACTS.distinctCoordinates}
-        data-measured-shared-coordinates={CONNECTOME_FACTS.measuredSharedCoordinates}
-        data-measured-piled-points={CONNECTOME_FACTS.measuredPiledPoints}
-        data-measured-max-pile={CONNECTOME_FACTS.measuredMaxPile}
-        style={{
-          position: 'absolute',
-          left: '1.1rem',
-          bottom: '0.95rem',
-          pointerEvents: 'none',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          textShadow: '0 1px 4px rgba(0,0,0,0.9)',
-        }}
-      >
+      {caption !== 'none' && (
         <div
-          data-testid="connectome-caption-label"
+          data-testid="connectome-caption"
+          data-caption-mode={caption}
+          data-neurons={CONNECTOME_FACTS.neurons}
+          data-measured-soma-neurons={CONNECTOME_FACTS.measuredSomaNeurons}
+          data-centroid-fill-neurons={CONNECTOME_FACTS.centroidFilled}
+          data-distinct-positions={CONNECTOME_FACTS.distinctCoordinates}
+          data-measured-shared-coordinates={CONNECTOME_FACTS.measuredSharedCoordinates}
+          data-measured-piled-points={CONNECTOME_FACTS.measuredPiledPoints}
+          data-measured-max-pile={CONNECTOME_FACTS.measuredMaxPile}
+          title={caption === 'compact' ? CAPTION_NOTE : undefined}
           style={{
-            fontSize: '0.58rem',
-            letterSpacing: '0.34em',
-            textTransform: 'uppercase',
-            color: '#6c8aa1',
-          }}
-        >
-          {CAPTION_LABEL}
-        </div>
-        <div
-          data-testid="connectome-caption-value"
-          style={{
-            marginTop: '0.3rem',
-            fontSize: '0.98rem',
-            letterSpacing: '0.04em',
-            color: '#d8eef6',
-          }}
-        >
-          {CAPTION_VALUE}
-        </div>
-        <div
-          data-testid="connectome-caption-note"
-          style={{
-            marginTop: '0.3rem',
-            maxWidth: '58ch',
-            fontSize: '0.6rem',
-            lineHeight: 1.45,
-            color: '#5e7a90',
-          }}
-        >
-          {CAPTION_NOTE}
-        </div>
-        <div
-          data-testid="connectome-legend"
-          style={{
-            marginTop: '0.35rem',
+            position: 'absolute',
+            left: '1.1rem',
+            bottom: '0.95rem',
             maxWidth: '62ch',
-            fontSize: '0.56rem',
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            color: '#4f6a7e',
+            pointerEvents: 'none',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            textShadow: '0 1px 4px rgba(0,0,0,0.9)',
           }}
         >
-          {CAPTION_LEGEND}
+          <div
+            data-testid="connectome-caption-label"
+            style={{
+              fontSize: '0.58rem',
+              letterSpacing: '0.34em',
+              textTransform: 'uppercase',
+              color: '#6c8aa1',
+            }}
+          >
+            {CAPTION_LABEL}
+          </div>
+          <div
+            data-testid="connectome-caption-value"
+            style={{
+              marginTop: '0.3rem',
+              fontSize: '0.98rem',
+              letterSpacing: '0.04em',
+              color: '#d8eef6',
+              lineHeight: 1.35,
+            }}
+          >
+            {CAPTION_VALUE}
+          </div>
+          {caption === 'full' && (
+            <div
+              data-testid="connectome-caption-note"
+              style={{
+                marginTop: '0.3rem',
+                maxWidth: '58ch',
+                fontSize: '0.6rem',
+                lineHeight: 1.45,
+                color: '#5e7a90',
+              }}
+            >
+              {CAPTION_NOTE}
+            </div>
+          )}
+          {caption === 'full' && (
+            <div
+              data-testid="connectome-legend"
+              style={{
+                marginTop: '0.35rem',
+                maxWidth: '62ch',
+                fontSize: '0.56rem',
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: '#4f6a7e',
+              }}
+            >
+              {CAPTION_LEGEND}
+            </div>
+          )}
+          {caption === 'compact' && (
+            <div
+              data-testid="connectome-legend"
+              style={{
+                marginTop: '0.4rem',
+                fontSize: '0.66rem',
+                letterSpacing: '0.1em',
+                textTransform: 'uppercase',
+                color: '#7d99ae',
+              }}
+            >
+              {CAPTION_LEGEND_COMPACT}
+            </div>
+          )}
         </div>
-      </div>
+      )}
       {!loaded ? (
         <div
           style={{
