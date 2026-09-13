@@ -107,7 +107,13 @@ Open `http://127.0.0.1:3300/fly` for the HUD, or `/lesson/fly` for the phone-in-
 
 **Build, then restart, then verify.** `next start` caches its build manifest at boot, so rebuilding under a running server leaves it serving old HTML against new hashed chunks. The page hangs on its loading state with a chunk 404 and it looks exactly like a code bug. It cost a full debugging pass here.
 
-**Commit inside `duolingo-clone` too.** It is its own repository and the parent tracks a pointer to it, so app work committed only in the parent is not saved. See [the app repository](https://github.com/mohvahedi/flylingo-app).
+One clone gets all of it:
+
+```bash
+git clone https://github.com/mohvahedi/flylingo.git
+```
+
+`duolingo-clone/` used to be a git submodule and needed `--recursive`. It is now part of this tree, grafted in as a subtree with its history, so ordinary commits work across the whole project.
 
 The visualization harnesses run standalone with synthetic drive and no backend:
 
@@ -130,7 +136,7 @@ It verifies both source hashes, streams the 1 GB edge table in Arrow batches so 
 brain/            Python service: connectome, reservoir, learning, curriculum, API
 viz-fly/          the 3D fly and the phone it plays on
 viz-brain/        the 166,700 neuron cloud
-duolingo-clone/   the lesson shell, a fork of sanidhyy/duolingo-clone (submodule)
+duolingo-clone/   the lesson shell, a fork of sanidhyy/duolingo-clone (MIT)
 colab/            the reproducible notebook and the single file Colab runner
 tools/            end to end checks, sync scripts, and the analysis tools
 INTERFACES.md     the frozen contract every component was built against
