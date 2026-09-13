@@ -25,6 +25,7 @@ import { RealFly } from './RealFly';
 import { RIG, StudioEnvironment } from './studio';
 import { Bloom } from './Bloom';
 import type { Behavior, ReactionKind } from './pose';
+import { REACH, ZERO_REACH, reachCurve, reachSeconds, type ReachState } from './reach';
 import {
   SCREEN,
   screenPlaneQuaternion,
@@ -351,6 +352,40 @@ function FlyActor({
   }, []);
 
   const scratch = useMemo(() => new THREE.Vector3(), []);
+  // The reach moves the body as well as the legs; see the touch block in useFrame.
+  const flightPos = useRef(new THREE.Vector3());
+  const glassNormal = useMemo(() => new THREE.Vector3(), []);
+  const legWorld = useMemo(() => new THREE.Vector3(), []);
+  const legLocal = useMemo(() => new THREE.Vector3(), []);
+  const screenInverse = useMemo(() => new THREE.Matrix4(), []);
+  const glassPoint = useMemo(() => new THREE.Vector3(), []);
+  const glassNormalV = useMemo(() => new THREE.Vector3(), []);
+  const camera = useThree((s) => s.camera);
+  const viewport = useThree((s) => s.size);
+
+  /**
+   * World -> CSS pixels for the current camera, published so a screenshot can be read against
+   * the same numbers the probe reports. Stable: built once per camera, not per frame.
+   */
+  useEffect(() => {
+    const px = window as unknown as { __flyPixel?: unknown };
+    px.__flyPixel = (x: number, y: number, z: number) => {
+      const v = new THREE.Vector3(x, y, z).project(camera);
+      return [(v.x * 0.5 + 0.5) * viewport.width, (0.5 - v.y * 0.5) * viewport.height].map(
+        (n) => +n.toFixed(1),
+      );
+    };
+  }, [camera, viewport]);
+
+  /**
+   * Dev only: hands the page the very object the pose reads, so the reach can be swept from
+   * the browser while tools/reach_measure.py watches the tarsi. That is how its numbers were
+   * chosen — measured, not guessed. In a build this branch is compiled out.
+   */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as { __REACH?: unknown }).__REACH = REACH;
+  }, []);
 
   useFrame((_, rawDelta) => {
     const g = group.current;
@@ -394,6 +429,25 @@ function FlyActor({
     g.position.lerpVectors(flightFrom.current, target.current, u);
     const remaining = g.position.distanceTo(target.current);
     const moving = remaining > 0.03 || !screen;
+    // the pure flight line, before the reach is allowed to move the body: the yaw and the
+    // arrival test both belong to the flight, not to the lean
+    flightPos.current.copy(g.position);
+
+    // ---- touching the answer -----------------------------------------------------
+    // The reach is not only legs: the fly leans in toward the glass and settles down onto the
+    // card, and that body movement is what carries the tarsi the last of the way. Written
+    // absolutely from the flight interpolation every frame, like the pose, so it can never
+    // accumulate; driven by the animator's own behavior clock so the body and the legs cannot
+    // disagree about where the tarsus is.
+    const reach: ReachState =
+      behavior === 'reach' ? reachCurve(anim.live.age) : ZERO_REACH;
+    if (screen && reach.on > 0) {
+      screen.updateWorldMatrix(true, false);
+      glassNormal.set(0, 0, 1).transformDirection(screen.matrixWorld);
+      if (glassNormal.dot(scratch.subVectors(camera.position, g.position)) < 0) glassNormal.negate();
+      g.position.addScaledVector(glassNormal, -REACH.lean * reach.on);
+      g.position.y -= REACH.drop * reach.on;
+    }
 
     const t = anim.live.t;
     if (moving) {
@@ -401,20 +455,81 @@ function FlyActor({
       if (behavior !== 'walk') setBehavior('walk');
     } else {
       if (arrivedAt.current < 0) arrivedAt.current = t;
-      // hold at the card, reach out to touch it, then settle rather than looping forever
+      // Land, put the forelegs on the answer it picked, then settle into a look around
+      // rather than looping forever.
       const dwelled = t - arrivedAt.current;
-      const want: Behavior = dwelled < 1.5 ? 'proboscis' : 'groom';
+      const want: Behavior =
+        dwelled < reachSeconds()
+          ? 'reach'
+          : dwelled < reachSeconds() + 1.5
+            ? 'proboscis'
+            : 'groom';
       if (behavior !== want) setBehavior(want);
     }
 
     // ---- face the way it is going, then the glass --------------------------------
     // The model's own forward direction is not documented, so the offset is a dial rather
     // than a guess: it is set from the screenshot so the fly does not travel sideways.
-    // publish the flight for verification: position, target and remaining distance
-    const w = window as unknown as { __flyPos?: unknown };
+    // publish the flight for verification: position, target and remaining distance, plus
+    // what the reach is doing and where the six tarsi are relative to the glass
+    const w = window as unknown as {
+      __flyPos?: unknown;
+      __flyProbe?: { foot?: number[][]; wing?: number[][] } | null;
+    };
+    const node = w.__flyProbe ?? null;
+    if (screen) screen.updateWorldMatrix(true, false);
+    const glass = screen
+      ? {
+          point: screen.getWorldPosition(new THREE.Vector3()).toArray().map((v) => +v.toFixed(4)),
+          normal: new THREE.Vector3(0, 0, 1).transformDirection(screen.matrixWorld).toArray().map((v) => +v.toFixed(4)),
+          up: new THREE.Vector3(0, 1, 0).transformDirection(screen.matrixWorld).toArray().map((v) => +v.toFixed(4)),
+          right: new THREE.Vector3(1, 0, 0).transformDirection(screen.matrixWorld).toArray().map((v) => +v.toFixed(4)),
+          height: SCREEN.height,
+        }
+      : null;
+    // Every tarsus against the glass, in the glass's own frame: the perpendicular distance,
+    // and where that lands in screen pixels so it can be compared with the card it chose.
+    let legs: { d: number; px: number; py: number; onCard: boolean }[] | null = null;
+    if (screen && glass && node?.foot?.length) {
+      screenInverse.copy(screen.matrixWorld).invert();
+      glassPoint.fromArray(glass.point);
+      glassNormalV.fromArray(glass.normal);
+      legs = node.foot.map((p) => {
+        legWorld.set(p[0], p[1], p[2]);
+        const d = legLocal.copy(legWorld).sub(glassPoint).dot(glassNormalV);
+        legLocal.copy(legWorld).applyMatrix4(screenInverse);
+        const px = (legLocal.x / SCREEN.width + 0.5) * SCREEN_W;
+        const py = (0.5 - legLocal.y / SCREEN.height) * SCREEN_H;
+        const onCard = Boolean(
+          rect && px >= rect.x && px <= rect.x + rect.w && py >= rect.y && py <= rect.y + rect.h,
+        );
+        return { d: +d.toFixed(4), px: +px.toFixed(1), py: +py.toFixed(1), onCard };
+      });
+    }
+    const cardRect =
+      rect && screen
+        ? {
+            px: [rect.x, rect.y, rect.w, rect.h].map((v) => +v.toFixed(1)),
+            corners: (
+              [
+                [rect.x, rect.y],
+                [rect.x + rect.w, rect.y],
+                [rect.x, rect.y + rect.h],
+                [rect.x + rect.w, rect.y + rect.h],
+              ] as [number, number][]
+            ).map(([px, py]) =>
+              screenPointToPlaneLocal(px, py, SCREEN_W, SCREEN_H, LAYOUT.standoff)
+                .applyMatrix4(screen!.matrixWorld)
+                .toArray()
+                .map((v) => +v.toFixed(4)),
+            ),
+          }
+        : null;
     w.__flyPos = {
       t: +t.toFixed(2),
-      pos: [g.position.x, g.position.y, g.position.z].map((v) => +v.toFixed(3)),
+      pos: [flightPos.current.x, flightPos.current.y, flightPos.current.z].map((v) =>
+        +v.toFixed(3),
+      ),
       target: [target.current.x, target.current.y, target.current.z].map((v) =>
         +v.toFixed(3),
       ),
@@ -423,6 +538,21 @@ function FlyActor({
       behavior,
       hasScreen: Boolean(screen),
       hasRect: Boolean(rect),
+      /** the body offset the reach is applying on top of the flight line */
+      reach: {
+        on: +reach.on.toFixed(4),
+        planted: +reach.planted.toFixed(4),
+        offset: [
+          +(g.position.x - flightPos.current.x).toFixed(4),
+          +(g.position.y - flightPos.current.y).toFixed(4),
+          +(g.position.z - flightPos.current.z).toFixed(4),
+        ],
+      },
+      rotY: +g.rotation.y.toFixed(4),
+      scale: +(LAYOUT.flySpan / 1.75).toFixed(4),
+      glass,
+      cardRect,
+      legs,
       cardWorld:
         screen && rects.length
           ? rects.map((r) => {
@@ -447,7 +577,8 @@ function FlyActor({
         : null,
     };
 
-    scratch.subVectors(target.current, g.position);
+    // world -> CSS pixels, so a screenshot can be read against the same numbers
+    scratch.subVectors(target.current, flightPos.current);
     if (scratch.lengthSq() > 1e-6) {
       const yaw = Math.atan2(scratch.x, scratch.z) + LAYOUT.flyYawOffset;
       let d = yaw - g.rotation.y;

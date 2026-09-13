@@ -85,6 +85,9 @@ export type ReachState = {
   tap: number;
 };
 
+/** The reach doing nothing. Shared so a frame that is not reaching allocates nothing. */
+export const ZERO_REACH: ReachState = { on: 0, planted: 0, tap: 0 };
+
 const smooth = (u: number) => {
   const x = u < 0 ? 0 : u > 1 ? 1 : u;
   return x * x * (3 - 2 * x);
@@ -98,7 +101,6 @@ export function reachCurve(age: number, tune: ReachTune = REACH): ReachState {
   if (!(age > 0)) return { on: 0, planted: 0, tap: 0 };
   const land = tune.extend;
   const off = tune.extend + tune.hold;
-  const end = off + tune.settle;
   if (age < land) return { on: smooth(age / land), planted: 0, tap: 0 };
   if (age < off) {
     const t = age - land;
