@@ -39,6 +39,18 @@ CHECKPOINT_OPTIONS = ROOT / "brain" / "runs" / "optionscorer" / "adapter.npz"
 #: curriculum: reservoir features of the prompt, mapped to the answer index. See
 #: brain/learning/prompt_index.py for why, and for the honest attribution caveat.
 CHECKPOINT_PROMPT_INDEX = ROOT / "brain" / "runs" / "promptindex" / "adapter.npz"
+#: Where the demo's plastic brain keeps its trained state between runs.
+#:
+#: The plastic brain never persisted anything: `_plastic_brain()` built a fresh one and the
+#: 117,800 trained synaptic scales died with the process, so every restart put the fly back at
+#: "has learned nothing" and the demo could not honestly claim to be resuming anything. Saving
+#: here on shutdown, and loading here on first use, is what makes a restart continue the run
+#: instead of restarting it.
+#:
+#: It lives under brain/runs/, which is gitignored: it is a runtime artifact, not a deliverable.
+DEMO_PLASTIC_CHECKPOINT = ROOT / "brain" / "runs" / "plastic_brain" / "demo.npz"
+#: A short fingerprint of the encoder travels inside every checkpoint. Kept next to the path so
+#: a refused load can say which scheme it was trained under instead of failing silently.
 
 EMBED_DIM = 256
 DIMS = 128
@@ -179,6 +191,13 @@ def _boot() -> None:
         rehearsals=0,
         #: whether the loaded readout started from no training at all
         fresh_brain=False,
+        # Cleared so `_boot()` is a genuine reset of the readout state. Every other readout key is
+        # rebuilt here, but this one was left behind, so a second boot in the same process kept the
+        # previous brain -- and with it the previous run's trained scales.
+        plastic_brain=None,
+        #: plasticity count at the last automatic checkpoint, so saves are spaced by progress
+        #: rather than by wall clock.
+        plastic_checkpoint_last_saved=0,
         lessons_completed=0,
         sessions={},
         session=None,
@@ -361,6 +380,11 @@ def _plastic_telemetry() -> dict:
         "plastic_settle_steps": int(pb.steps),
         "plastic_pools": int(pb.n_pools),
         "plastic_pool_size": int(pb.pool_size),
+        # Which persistence state this brain is in, so the panel can say it rather than implying
+        # the fly always starts from nothing (or always remembers).
+        "plastic_checkpoint_path": str(DEMO_PLASTIC_CHECKPOINT),
+        "plastic_checkpoint_exists": DEMO_PLASTIC_CHECKPOINT.exists(),
+        "plastic_updates": int(pb.updates),
     }
 
 
@@ -387,8 +411,104 @@ def _plastic_brain():
             max_plastic_edges=PLASTIC_MAX_EDGES,
             lr=PLASTIC_LR,
         )
+        # Resume the last run if there is one, and SAY WHICH STATE IS ACTIVE.
+        #
+        # The status string is not decoration. A surface that shows an accuracy figure without
+        # saying whether a model is loaded implies a claim the experiment did not establish, and
+        # this project has already shipped one number whose recorded origin was wrong. Three
+        # outcomes, all stated: resumed, fresh, or refused (a checkpoint trained under a
+        # different encoder or a different pool layout is not applied, it is reported).
+        status = f"plastic connectome, scales at 1.0 (fresh, no checkpoint at {DEMO_PLASTIC_CHECKPOINT.name})"
+        if DEMO_PLASTIC_CHECKPOINT.exists():
+            try:
+                meta = pb.load(DEMO_PLASTIC_CHECKPOINT)
+                status = (
+                    f"plastic connectome, resumed from {DEMO_PLASTIC_CHECKPOINT.name} "
+                    f"({meta['updates']} updates)"
+                )
+                STATE["fresh_brain"] = False
+            except Exception as exc:  # noqa: BLE001 - a refused checkpoint is data, not a crash
+                status = (
+                    f"plastic connectome, scales at 1.0 (checkpoint refused: "
+                    f"{type(exc).__name__}: {exc})"
+                )
         STATE["plastic_brain"] = pb
+        STATE["checkpoint_status"] = status
+        STATE["plastic_checkpoint_path"] = str(DEMO_PLASTIC_CHECKPOINT)
     return pb
+
+
+def _save_plastic_brain() -> str | None:
+    """Write the plastic brain's trained weights so a restart continues instead of restarting.
+
+    Only saves a brain that has actually trained. An untrained brain is not saved over a trained
+    one: `/session?fresh=true` and `/train?fresh=true` both reset the scales to 1.0, and persisting
+    that on exit would destroy the run the user was resuming. ``updates`` is the guard, because it
+    counts real plasticity steps rather than anything a caller asserts.
+
+    Returns the path written, or None when there was nothing worth writing.
+    """
+    pb = STATE.get("plastic_brain")
+    if pb is None or int(getattr(pb, "updates", 0)) <= 0:
+        return None
+    try:
+        with STATE["lock"]:
+            pb.save(DEMO_PLASTIC_CHECKPOINT)
+        STATE["plastic_checkpoint_last_saved"] = int(pb.updates)
+        return str(DEMO_PLASTIC_CHECKPOINT)
+    except Exception:  # noqa: BLE001 - a failed save must not take the server down with it
+        return None
+
+
+def _load_checkpoint_for(kind: str) -> dict:
+    """Load the saved checkpoint for a given readout kind, or report why it could not be.
+
+    ONE place decides how a readout resumes, so `/train` cannot grow a second, subtly different
+    path -- the drift that produced the architecture-swap bug this file has already had twice.
+    """
+    if kind == "plastic_brain":
+        if not DEMO_PLASTIC_CHECKPOINT.exists():
+            return {"ok": False, "readout_kind": kind,
+                    "checkpoint_status": f"no plastic checkpoint at {DEMO_PLASTIC_CHECKPOINT.name}"}
+        pb = _plastic_brain()
+        try:
+            meta = pb.load(DEMO_PLASTIC_CHECKPOINT)
+        except Exception as exc:  # noqa: BLE001 - a refusal is information, not a crash
+            return {"ok": False, "readout_kind": kind,
+                    "checkpoint_status": f"refused: {type(exc).__name__}: {exc}"}
+        STATE["checkpoint_status"] = (
+            f"plastic connectome, resumed {DEMO_PLASTIC_CHECKPOINT.name} ({meta['updates']} updates)"
+        )
+        return {"ok": True, "readout_kind": kind,
+                "checkpoint_status": STATE["checkpoint_status"]}
+
+    loaded, status = _load_readout(CHECKPOINT_PROMPT_INDEX)
+    if loaded is None:
+        return {"ok": False, "readout_kind": kind, "checkpoint_status": status}
+    STATE["adapter"], STATE["readout_kind"] = loaded
+    STATE["checkpoint_status"] = status
+    return {"ok": True, "readout_kind": STATE["readout_kind"], "checkpoint_status": status}
+
+
+def _maybe_checkpoint_plastic() -> str | None:
+    """Save the plastic brain every few hundred updates, so progress survives an abrupt exit.
+
+    A shutdown hook is not enough on its own, and measuring it is what showed that: on Windows
+    `terminate()` is a hard kill, so uvicorn never runs its lifespan shutdown and the save simply
+    does not happen -- no error, no checkpoint, the run gone. Closing a terminal or killing a
+    process is the normal way a demo stops, so relying on a graceful exit would have lost the
+    trained weights on the platform this project is developed on.
+
+    Cheap enough to do inline: the checkpoint is ~430 KB compressed, and this runs once per few
+    hundred plasticity steps rather than once per answer.
+    """
+    pb = STATE.get("plastic_brain")
+    if pb is None:
+        return None
+    done = int(getattr(pb, "updates", 0))
+    if done - int(STATE.get("plastic_checkpoint_last_saved", 0)) < PLASTIC_CHECKPOINT_EVERY:
+        return None
+    return _save_plastic_brain()
 
 
 def _decision_features(ch: dict) -> np.ndarray:
@@ -459,6 +579,18 @@ def _startup() -> None:
     STATE["tick_thread"] = thread
 
 
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    """Persist the plastic brain's trained weights so the next run resumes.
+
+    Without this the trained synapses died with the process and every restart put the fly back at
+    scales 1.0. Saving is conditional on the brain having actually taken plasticity steps, so a
+    session that was deliberately reset to fresh cannot overwrite the run stored on disk.
+    """
+    saved = _save_plastic_brain()
+    STATE["plastic_checkpoint_saved_on_exit"] = saved
+
+
 # ------------------------------------------------------------------- encoder
 # The encoders live in brain/encoders.py so that training and serving use ONE
 # implementation. They were previously duplicated here and built on Python's builtin
@@ -522,6 +654,13 @@ PLASTIC_LR = 0.01
 # this sets how fast the demo learns on screen. Measured: without it the live curve needs about
 # ninety minutes to leave chance, with it the change is visible inside a minute.
 PLASTIC_REPLAY_STEPS = 20
+# How many plasticity updates between automatic checkpoints of the demo's plastic brain.
+#
+# This exists because a shutdown hook alone is not enough: on Windows `terminate()` hard-kills the
+# process, so uvicorn's shutdown never runs and an abrupt exit would lose the run. Set well below
+# the ~340 updates an epoch of the 97-item curriculum takes, so at most a fraction of an epoch of
+# progress is ever at risk, and high enough that the ~430 KB save is not in the hot path.
+PLASTIC_CHECKPOINT_EVERY = 100
 
 
 # --------------------------------------------------------------------- helpers
@@ -596,8 +735,12 @@ def _current_frame(state: dict, chosen=None, reward=None, correct=None) -> dict:
         "checkpoint_status": STATE.get("checkpoint_status"),
         # ---- the brain's own synapses, when it is the thing that learns ----
         **_plastic_telemetry(),
-        "entropy": float(STATE.get("last", {}).get("entropy", 0.0)),
-        "grad_norm": float(STATE.get("last", {}).get("grad_norm", 0.0)),
+        # `STATE["last"]` is None until the first answer, and `.get("last", {})` returns the stored
+        # None rather than the default because the key EXISTS. So a fresh server raised
+        # AttributeError here: GET /telemetry returned 500 until something had answered once, which
+        # is precisely when the HUD asks for it on load. `or {}` is the fix.
+        "entropy": float((STATE.get("last") or {}).get("entropy", 0.0)),
+        "grad_norm": float((STATE.get("last") or {}).get("grad_norm", 0.0)),
         "rehearsals": int(STATE.get("rehearsals", 0)),
         "replay_size": len(STATE.get("replay_x", [])),
         "training": bool(STATE.get("training", True)),
@@ -784,6 +927,9 @@ def answer(req: AnswerReq) -> dict:
                         k = int(STATE["rng"].integers(0, len(pb_buf)))
                         pb.observe(pb_buf[k][0], pb_buf[k][1])
                     STATE["rehearsals"] = int(STATE.get("rehearsals", 0)) + PLASTIC_REPLAY_STEPS
+                # Automatic checkpoint, so an abrupt exit does not lose the run. The state lock is
+                # an RLock and save() re-acquires it, which is safe here for the same thread.
+                _maybe_checkpoint_plastic()
             else:
                 info = {"loss": float(-np.log(max(float(probs[action]), 1e-12)))}
             f = None
@@ -945,18 +1091,32 @@ def train(req: TrainReq) -> dict:
         if req.kind not in ("plastic_brain", "prompt_index", "policy_adapter"):
             return {"ok": False, "detail": f"unknown readout kind {req.kind!r}"}
         STATE["readout_kind"] = req.kind
-        # One reset path, used by /train and /session alike, so the two cannot drift apart.
-        _reset_readout_learning()
-        STATE["fresh_brain"] = True
+        # Switching readout and clearing its learning are two separate intentions, and `fresh`
+        # carries which one the caller wants. This used to reset unconditionally whenever a kind
+        # was given, which made the resume path unreachable: the only way to select the plastic
+        # brain was to wipe it, so a saved run could never actually be resumed -- the checkpoint
+        # would be loaded by the next lazy build only if the plastic brain were already active,
+        # and it never was, because selecting it is what reset it.
+        if req.fresh:
+            _reset_readout_learning()
+            STATE["fresh_brain"] = True
+        else:
+            resumed = _load_checkpoint_for(req.kind)
+            if not resumed.get("ok"):
+                return resumed
+            STATE["fresh_brain"] = False
     elif req.fresh:
         _reset_readout_learning()
         STATE["fresh_brain"] = True
     else:
-        loaded, status = _load_readout(CHECKPOINT_PROMPT_INDEX)
-        if loaded is None:
-            return {"ok": False, "checkpoint_status": status}
-        STATE["adapter"], STATE["readout_kind"] = loaded
-        STATE["checkpoint_status"] = status
+        # "Reload the trained one" has to mean the ACTIVE readout's checkpoint. It used to load
+        # the prompt-index checkpoint unconditionally, so asking to reload while the plastic brain
+        # was selected silently swapped the architecture back to the old readout and the demo
+        # stopped running on the connectome -- the same class of failure as the session-start bug
+        # in _reset_readout_learning.
+        resumed = _load_checkpoint_for(STATE.get("readout_kind") or "prompt_index")
+        if not resumed.get("ok"):
+            return resumed
         STATE["fresh_brain"] = False
 
     global TRAIN_LR, REPLAY_STEPS
