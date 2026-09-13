@@ -384,3 +384,38 @@ implying a pretrained model is learning.
 **The course advances.** 15 lessons across 4 units, 97 challenges. Finishing a lesson moves to
 the next one and wraps at the end, so a public demo does not dead-end on the first lesson. The
 frame reports `lesson_pos`, `lesson_total`, `lesson_title` and `lessons_completed`.
+
+## Does the connectome's wiring matter? No.
+
+Asked directly, and answered by measurement rather than assertion. Four arms, identical
+parameters, 60 epochs each, one training run per arm:
+
+| arm | start | final | gain |
+|---|---|---|---|
+| intact (MaleCNS v1.0) | 19.6% | **92.8%** | +73.2% |
+| shuffled | 19.6% | **89.7%** | +70.1% |
+| random_graph (degree-matched) | 23.7% | **92.8%** | +69.1% |
+| no_edges | 21.6% | **21.6%** | +0.0% |
+
+Spread across intact / shuffled / random: **3.1%**. Majority-class baseline 26.8%.
+
+Two claims, both supported:
+
+1. **A recurrent graph is necessary.** The edge-free control sits exactly at chance, because its
+   state is exactly zero.
+2. **Which graph is irrelevant.** The measured connectome is indistinguishable from a shuffled
+   relabelling of itself and from a degree-matched random matrix.
+
+That is the standard reservoir-computing result: a rich fixed recurrent structure gives a useful
+feature space, and the specific wiring is not what carries the information.
+
+An earlier run of the same comparison, with a defective read-out, produced intact +34.0% /
+shuffled +4.1% / random -5.2% and would have supported the opposite claim. That gap was an
+artifact of the read-out, not the fly. See `brain/NOTES_does_the_wiring_matter.md` for what the
+defect was, why an inadequate read-out makes a control comparison measure the read-out, and the
+limits of the present result (train accuracy on 97 examples, one seed, no held-out set).
+
+Compute: the recurrence runs on the GPU, which is **26x** faster here (5.2 ms per six-step settle
+against 136 ms, the sparse product being memory-bandwidth-bound at 1.6 G nnz/s on one core and
+41.7 G nnz/s on the device). A converged four-arm comparison takes about a minute instead of an
+hour. Correctness is pinned by `brain/tests/test_gpu_matvec.py`.
