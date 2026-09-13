@@ -595,7 +595,17 @@ def start_session(req: StartReq) -> dict:
 class AnswerReq(BaseModel):
     session_id: str
     challenge_id: str
-    choice_index: int
+    choice_index: int = -1
+    # Whose answer drives the lesson.
+    #
+    # False (default): the human clicked an option, and that answer moves hearts, XP and
+    # progress while the fly is scored on its own separate action.
+    #
+    # True: nobody is playing. The fly's own sampled action is what counts, so the lesson
+    # advances exactly as if the fly had clicked. This is what makes the demo run hands-off and
+    # recordable: without it the frame sat on the first challenge forever because nothing ever
+    # submitted an answer, so the fly never chose, never moved and never earned reward.
+    as_fly: bool = False
 
 
 @app.post("/answer")
@@ -652,8 +662,11 @@ def answer(req: AnswerReq) -> dict:
         # keeps the drawn pulse and the applied gradient from ever being different numbers.
         dopamine = _pulse_dopamine(bool(fly_correct))
 
-    # The user's answer drives the lesson itself: hearts, XP, progress.
-    correct = int(req.choice_index) == int(ch["correctIndex"])
+    # Whose answer drives the lesson itself. In the hands-off demo the fly answers for itself,
+    # so its own sampled action is the one that moves hearts, XP and progress; otherwise the
+    # human's click is. Either way the fly is scored on its own action.
+    driving_choice = int(action) if req.as_fly else int(req.choice_index)
+    correct = driving_choice == int(ch["correctIndex"])
 
     STATE["step"] += 1
     sess.answered += 1
@@ -683,7 +696,7 @@ def answer(req: AnswerReq) -> dict:
             "fly_correct": bool(fly_correct),
             "accuracy": sess.correct / sess.answered,
             "fly_accuracy": STATE["fly_correct"] / STATE["fly_answered"],
-            "user_choice": int(req.choice_index),
+            "user_choice": int(driving_choice),
             "fly_choice": int(action),
             "answer_index": int(ch["correctIndex"]),
             "reward": reward,
