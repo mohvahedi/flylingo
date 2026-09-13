@@ -9,6 +9,7 @@ import { api, useBrainStream, useServiceHealth } from "@/lib/flylingo/api";
 import type { AnswerResult, ApiChallenge, Mode, SessionStart } from "@/lib/flylingo/types";
 
 import { HudLesson } from "./lesson";
+import { HudTraining } from "./training";
 import { Chip, FitBox, HUD, HudStage, Label, LegendDot, Panel, Spark, Stat } from "./primitives";
 
 /** Both visualizations are WebGL and client-only; neither has a server renderer. */
@@ -67,6 +68,7 @@ export function HudApp() {
   const [history, setHistory] = useState<{ user: boolean; fly: boolean }[]>([]);
   const [bootError, setBootError] = useState<string | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
+  const [trainBusy, setTrainBusy] = useState(false);
   const [rmsHistory, setRmsHistory] = useState<number[]>([]);
   const [activeHistory, setActiveHistory] = useState<number[]>([]);
 
@@ -157,6 +159,45 @@ export function HudApp() {
       toast.error("could not switch control condition");
     } finally {
       setModeBusy(false);
+    }
+  }, []);
+
+  /**
+   * Freeze or resume plasticity, keeping the current weights.
+   *
+   * Turning training off is the control, not a convenience: the same lesson, the same
+   * connectome and the same readout with the weights frozen, so the learning curve can be
+   * seen to flatten. That comparison is the difference between showing training and claiming it.
+   */
+  const onToggleTraining = useCallback(async () => {
+    setTrainBusy(true);
+    try {
+      await api.train(false, { training: !(frame?.training ?? true) });
+    } catch {
+      toast.error("could not change the training state");
+    } finally {
+      setTrainBusy(false);
+    }
+  }, [frame?.training]);
+
+  /** Wipe the readout back to a naive brain and start the course again so it can be watched. */
+  const onRestartFresh = useCallback(async () => {
+    setTrainBusy(true);
+    try {
+      await api.train(true, { training: true });
+      const s = await api.startSession(undefined, { fresh: true });
+      setSession(s);
+      setChallenge(s.challenge);
+      setSelected(undefined);
+      setStatus("none");
+      setResult(null);
+      setAnswered(0);
+      setHistory([]);
+      toast.success("brain reset · watching it learn from scratch");
+    } catch {
+      toast.error("could not reset the brain");
+    } finally {
+      setTrainBusy(false);
     }
   }, []);
 
@@ -345,19 +386,20 @@ export function HudApp() {
             </Panel>
           </div>
 
-          {/* right column: the lesson the fly is answering */}
-          <Panel
-            grow
-            glow
-            pad={20}
-            label="lesson · fly answers in real time"
-            right={
-              <Label tone="faint">
-                {answered}
-                {total ? ` / ${total}` : ""} answered
-              </Label>
-            }
-          >
+          {/* right column: the lesson the fly is answering, and what it is learning */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 20, minHeight: 0 }}>
+            <Panel
+              grow
+              glow
+              pad={20}
+              label="lesson · fly answers in real time"
+              right={
+                <Label tone="faint">
+                  {answered}
+                  {total ? ` / ${total}` : ""} answered
+                </Label>
+              }
+            >
             {bootError ? (
               <div
                 style={{
@@ -425,7 +467,43 @@ export function HudApp() {
                 history={history}
               />
             )}
-          </Panel>
+            </Panel>
+
+            {/* What the fly is learning, and the reward driving it. Every number is measured by
+                the service and reported in the live frame; nothing here is interpolated. */}
+            <Panel
+              height={344}
+              pad={16}
+              label="learning · reward · rehearsal"
+              right={
+                <Label tone={frame?.fresh_brain ? "amber" : "cyan"} size={10}>
+                  {frame?.fresh_brain ? "from scratch" : "pretrained"}
+                </Label>
+              }
+            >
+              <HudTraining
+                windowAccuracy={frame?.window_accuracy ?? 0}
+                windowSize={frame?.window_size ?? 0}
+                dopamine={frame?.dopamine ?? 0}
+                dopamineTotal={frame?.dopamine_total ?? 0}
+                rehearsals={frame?.rehearsals ?? 0}
+                replaySize={frame?.replay_size ?? 0}
+                entropy={frame?.entropy ?? 0}
+                freshBrain={frame?.fresh_brain ?? false}
+                training={frame?.training ?? true}
+                lessonPos={frame?.lesson_pos ?? 0}
+                lessonTotal={frame?.lesson_total ?? 15}
+                lessonTitle={frame?.lesson_title ?? null}
+                lessonsCompleted={frame?.lessons_completed ?? 0}
+                learnedCorrect={frame?.learned_correct ?? 0}
+                learnedAnswered={frame?.learned_answered ?? 0}
+                params={516}
+                busy={trainBusy}
+                onToggleTraining={() => void onToggleTraining()}
+                onRestartFresh={() => void onRestartFresh()}
+              />
+            </Panel>
+          </div>
         </div>
 
         {/* ---------------------------------------------------------- lower third */}

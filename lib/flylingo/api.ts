@@ -40,8 +40,11 @@ async function get<T>(path: string): Promise<T> {
 export const api = {
   health: () => get<Health>("/health"),
   curriculum: () => get<Curriculum>("/curriculum"),
-  startSession: (lessonId?: string) =>
-    post<SessionStart>("/session", { lesson_id: lessonId ?? null }),
+  startSession: (lessonId?: string, opts?: { fresh?: boolean }) =>
+    post<SessionStart>("/session", {
+      lesson_id: lessonId ?? null,
+      fresh: opts?.fresh ?? false,
+    }),
   answer: (sessionId: string, challengeId: string, choiceIndex: number) =>
     post<AnswerResult>("/answer", {
       session_id: sessionId,
@@ -50,6 +53,29 @@ export const api = {
     }),
   control: (mode: Mode) => post<{ mode: Mode; note: string }>("/control", { mode }),
   reset: () => post<{ ok: boolean }>("/reset", {}),
+  /**
+   * Reset the readout to untrained, or reload the shipped checkpoint.
+   *
+   * The shipped checkpoint has already memorised the whole curriculum, so with it loaded there
+   * is nothing to watch learn. This is how the UI offers "watch it learn from scratch" and
+   * "already trained" as a real, honest choice instead of implying the pretrained model trains.
+   */
+  train: (fresh: boolean, extra?: { lr?: number; replaySteps?: number; training?: boolean }) =>
+    post<{
+      ok: boolean;
+      fresh_brain: boolean;
+      checkpoint_status: string | null;
+      readout_kind: string | null;
+      parameters: number;
+      training: boolean;
+      lr: number;
+      replay_steps: number;
+    }>("/train", {
+      fresh,
+      training: extra?.training,
+      lr: extra?.lr,
+      replay_steps: extra?.replaySteps,
+    }),
 };
 
 export type StreamStatus = "connecting" | "open" | "closed";

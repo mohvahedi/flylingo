@@ -35,6 +35,32 @@ export type BrainFrame = {
   hearts: number;
   xp: number;
   controls: Partial<Record<Mode, number>>;
+  // ---- reward and training telemetry, added with online training ----
+  /** The live dopamine trace, 0..1. This is the same signal that gated the last weight update. */
+  dopamine: number;
+  /** How many reward pulses have fired this session. */
+  dopamine_total: number;
+  /** True when the readout started from no training at all, so learning is watchable. */
+  fresh_brain: boolean;
+  learned_correct: number;
+  learned_answered: number;
+  /** Accuracy over the last `window_size` answers. This is the curve that shows learning; the
+   *  cumulative figure barely moves after a hundred answers and looks flat while it improves. */
+  window_accuracy: number;
+  window_size: number;
+  lessons_completed: number;
+  /** Which lesson of the course is in play, and how many there are. */
+  lesson_pos: number;
+  lesson_total: number;
+  lesson_title: string | null;
+  readout_kind: string | null;
+  checkpoint_status: string | null;
+  entropy: number;
+  grad_norm: number;
+  /** Supervised rehearsal steps taken from the replay buffer. */
+  rehearsals: number;
+  replay_size: number;
+  training: boolean;
 };
 
 export type ApiChallenge = {
