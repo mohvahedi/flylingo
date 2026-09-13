@@ -387,35 +387,44 @@ frame reports `lesson_pos`, `lesson_total`, `lesson_title` and `lessons_complete
 
 ## Does the connectome's wiring matter? No.
 
-Asked directly, and answered by measurement rather than assertion. Four arms, identical
-parameters, 60 epochs each, one training run per arm:
+Two claims, kept separate because they have different evidence:
 
-| arm | start | final | gain |
+1. **A recurrent graph is necessary.** The edge-free control sits at chance (21.6%) because its
+   state is exactly zero. Unambiguous.
+2. **Which graph is irrelevant.** measured, shuffled and degree-matched random all land in the
+   same place.
+
+The evidence for (2) is the per-epoch series, not a spread figure. Over epochs 21-60 of a
+60-epoch run, the gap between the intact connectome and the best control was **+0.1 points on
+average, with an sd of 3.7**, ranging from -9.3 to +8.2, and intact led in **18 of 40 epochs
+(45%)**. A coin flip is 50%.
+
+Single-epoch accuracy swings by 7-8.5 points within one arm, so a reading taken at one epoch is a
+draw from that distribution. Stopping this same run at epoch 15 gives intact 83.5% against
+shuffled 74.2% and looks like a wiring advantage; stopping at 10, 20, 30 or 60 does not.
+
+| arm | last-10-epoch mean | final epoch | start |
 |---|---|---|---|
-| intact (MaleCNS v1.0) | 19.6% | **92.8%** | +73.2% |
-| shuffled | 19.6% | **89.7%** | +70.1% |
-| random_graph (degree-matched) | 23.7% | **92.8%** | +69.1% |
-| no_edges | 21.6% | **21.6%** | +0.0% |
+| intact (MaleCNS v1.0) | 94.8% | 92.8% | 19.6% |
+| shuffled | 92.0% | 89.7% | 19.6% |
+| random_graph (degree-matched) | **95.1%** | 92.8% | 23.7% |
+| no_edges | 21.6% | 21.6% | 21.6% |
 
-Spread across intact / shuffled / random: **3.1%**. Majority-class baseline 26.8%.
-
-Two claims, both supported:
-
-1. **A recurrent graph is necessary.** The edge-free control sits exactly at chance, because its
-   state is exactly zero.
-2. **Which graph is irrelevant.** The measured connectome is indistinguishable from a shuffled
-   relabelling of itself and from a degree-matched random matrix.
+Majority-class baseline 26.8%. The random graph is nominally the highest arm. The trained
+ceiling is **94.7%** (mean of the last 10 epochs of a 60-epoch run), not the 100% that a single
+lucky epoch produced.
 
 That is the standard reservoir-computing result: a rich fixed recurrent structure gives a useful
 feature space, and the specific wiring is not what carries the information.
 
-An earlier run of the same comparison, with a defective read-out, produced intact +34.0% /
-shuffled +4.1% / random -5.2% and would have supported the opposite claim. That gap was an
-artifact of the read-out, not the fly. See `brain/NOTES_does_the_wiring_matter.md` for what the
-defect was, why an inadequate read-out makes a control comparison measure the read-out, and the
-limits of the present result (train accuracy on 97 examples, one seed, no held-out set).
+**Two earlier claims in this project were false and are corrected here.** An equal-weight mean
+read-out produced intact +34.0% / shuffled +4.1% / random -5.2% and was reported as "the wiring
+matters" — the read-out was the bottleneck, and a control comparison run through an inadequate
+read-out measures the read-out. A later 15-epoch run produced a second "wiring matters" verdict
+from one lucky epoch. Both are documented in `brain/NOTES_does_the_wiring_matter.md`, along with
+the rule that came out of them: report an average over epochs, vary the seed, and compare the
+effect against the seed-to-seed spread before claiming anything.
 
-Compute: the recurrence runs on the GPU, which is **26x** faster here (5.2 ms per six-step settle
-against 136 ms, the sparse product being memory-bandwidth-bound at 1.6 G nnz/s on one core and
-41.7 G nnz/s on the device). A converged four-arm comparison takes about a minute instead of an
-hour. Correctness is pinned by `brain/tests/test_gpu_matvec.py`.
+Compute: the recurrence runs on the GPU, **26x** faster here (5.2 ms per six-step settle against
+136 ms, the sparse product being memory-bandwidth-bound at 1.6 G nnz/s on one core and 41.7 G
+nnz/s on the device). Pinned by `brain/tests/test_gpu_matvec.py`.

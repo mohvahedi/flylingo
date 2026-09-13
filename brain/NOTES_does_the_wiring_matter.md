@@ -1,86 +1,102 @@
-# Does the connectome's wiring matter? Corrected.
+# Does the connectome's wiring matter?
 
 ## Short answer
 
-**No.** Any connected graph works; only a disconnected one fails. But reaching that answer
-required fixing two of my own defects first, and one earlier claim of mine was wrong.
+**No — and this time the answer is supported by the noise, not just a point estimate.** A
+recurrent graph is required; which graph it is cannot be detected on this task.
 
-| arm | start | final (60 epochs) | gain |
+Two claims, kept separate because they have different evidence:
+
+1. **A recurrent graph is necessary.** The edge-free control sits at chance (21.6%) because its
+   state is exactly zero. This is a hard, unambiguous result.
+2. **Which graph is irrelevant.** intact, shuffled and random_graph all reach the same place. The
+   best evidence for this is not a spread figure but the per-epoch series below.
+
+## Two false findings, self-caught
+
+This comparison has now produced two wrong answers, and both were measurement errors rather than
+facts about the fly. They are recorded because the failure mode is instructive.
+
+### False finding 1: "the wiring matters" (equal-weight mean read-out)
+
+intact +34.0% / shuffled +4.1% / random -5.2%, reported as *"the intact connectome finished clear
+of both controls; the wiring matters here."*
+
+The read-out was the equal-weight mean of each pool's 200 neurons, which is 37.1% linearly
+separable where the same neurons read with learned weights are 100%. It was measuring its own
+weakness, and the intact graph happened to survive that weakness slightly better. **A control
+comparison run through an inadequate read-out measures the read-out.**
+
+### False finding 2: "the wiring matters" again (single epoch)
+
+After fixing the read-out, a 15-epoch run produced intact 83.5% against shuffled 74.2% — a 9.3
+point spread — and the script printed *"The intact connectome finished clear of both controls.
+The wiring matters here."*
+
+That reading is **one epoch out of a noisy series, and it was the lucky end of it.** From the same
+run's own per-epoch record:
+
+| statistic, epochs 21-60 | value |
+|---|---|
+| mean gap (intact − best control) | **+0.1 pts** |
+| sd of the gap | 3.7 pts |
+| range of the gap | −9.3 to +8.2 pts |
+| epochs where intact led | **18/40 = 45%** (a coin flip is 50%) |
+| epochs that would have printed "wiring matters" | 4/60 = **7%** |
+
+Stopping at epoch 15 would have claimed a wiring advantage. Stopping at 10, 20, 30 or 60 would
+not. The verdict was decided by where the loop stopped, not by the wiring.
+
+Single-epoch accuracy swings by **7–8.5 points** (sd) within one arm, with a spread of up to 36
+points between the best and worst epoch. Any conclusion drawn from one final epoch is a draw from
+that distribution.
+
+## What the numbers actually are
+
+60 epochs, one seed, last-10-epoch means (a single final epoch is too noisy to quote):
+
+| arm | last-10 mean | final epoch | start |
 |---|---|---|---|
-| intact (MaleCNS v1.0) | 19.6% | **92.8%** | +73.2% |
-| shuffled | 19.6% | **89.7%** | +70.1% |
-| random_graph (degree-matched) | 23.7% | **92.8%** | +69.1% |
-| no_edges | 21.6% | **21.6%** | +0.0% |
+| intact (MaleCNS v1.0) | 94.8% | 92.8% | 19.6% |
+| shuffled | 92.0% | 89.7% | 19.6% |
+| random_graph | **95.1%** | 92.8% | 23.7% |
+| no_edges | 21.6% | 21.6% | 21.6% |
 
-Spread across intact / shuffled / random: **3.1%**. Majority-class baseline 26.8%.
+Majority-class baseline 26.8%. The random graph is nominally *highest*.
 
-So two separate statements, both true:
-
-1. **A recurrent graph is necessary.** `no_edges` is exactly chance, because its state is exactly
-   zero and every pool reads the same value.
-2. **Which graph is irrelevant.** The measured connectome is statistically indistinguishable from
-   a shuffled relabelling of itself and from a degree-matched random matrix.
-
-That is the classic reservoir-computing result: a sufficiently rich fixed recurrent structure
-provides a useful feature space, and the specific wiring is not what carries the information.
-
-## A claim I got wrong
-
-Earlier, running with the equal-weight pool mean, the arms came out at intact +34.0%, shuffled
-+4.1%, random -5.2%, and I reported that **"the intact connectome finished clear of both
-controls; the wiring matters here."**
-
-That was an artifact of a defective read-out, not a property of the fly. The mean read-out was
-itself the bottleneck (37.1% linearly separable against 100% for the same neurons read with
-learned weights), so it was measuring its own weakness, and the intact graph happened to survive
-that weakness slightly better than the controls. Once the read-out is adequate, the gap closes to
-3.1%.
-
-The lesson: a control comparison run through an inadequate read-out measures the read-out.
-
-## Why this now agrees with the original finding
-
-The very first measurement in this project, with a frozen connectome and a separate 516-parameter
-readout, had every arm at exactly 1.000 (spread 0.000) and was dismissed as uninformative because
-a task everything can memorise cannot discriminate.
-
-The conclusion is now the same from a design where the brain itself both chooses and learns. Two
-independent architectures, one answer: **the connectome confers no measurable advantage on this
-task.** The earlier dismissal was right about the measurement and wrong to imply the question was
-still open.
-
-## What the two defects were
-
-Both were mine, and both had to be fixed before the comparison could mean anything:
-
-**1. The recurrence never ran.** `_decision_features` reset the state and took a single step, so
-with a previous state of zero the update collapsed to one matrix multiply. The dynamics never
-executed and the wiring had nothing to contribute. `settle()` now runs the recurrence with the
-input held.
-
-**2. The decision discarded the answer.** The read-out was the equal-weight mean of each pool's
-200 neurons. Linear probe on frozen representations: 4 pool means **37.1%**, the brain's 128-dim
-settled state **100%**. Pool size was not the cause (1 neuron 38.1%, 200 neurons 37.1%) and
-neither was neuron selection (most-selective 34.0%); averaging discards *which* neurons fired.
-Reading each pool with learned weights fixed it, and that is also what a real mushroom body
-output neuron is.
+**The ceiling run's honest headline is 94.7%, not 100%.** A peak of 100% occurred twice in 61
+epochs; the last-10 mean is 94.7% with an sd of ~3.9 points, and only 9 of 61 epochs reached 95%.
 
 ## What is actually established
 
 - The brain chooses: the answer is the argmax over its own four neuron populations.
 - The brain learns: 117,800 plastic synapses on real connectome edges plus 800 read-out weights.
-- It reaches **100% peak / 92.8% final** train accuracy on the 97 challenges, from 19.6%.
-- The specific wiring does not matter; a graph does.
+- It reaches ~95% train accuracy on the 97 challenges, from 19.6%.
+- A recurrent graph is necessary and the specific wiring is not detectable as an advantage.
 
 ## Limits, stated plainly
 
 - **Train accuracy on 97 examples, not a held-out set.** This measures fit, not generalisation.
-- **One seed per arm.** Not replicated.
+- **The noisy single-seed figures above are superseded** by the multi-seed run
+  (`artifacts/seeds60.log`, 5 seeds, paired per seed). A single seed cannot separate a 5-point
+  effect from seed noise, which is the whole lesson of this file.
 - **Learnable-by-construction.** All 97 challenges are presented every epoch, so a readout of
-  this size can fit them. That is what "learns Spanish" means at 97 phrases, and it is
-  memorisation of the phrase-to-answer mapping rather than language.
+  this size can fit them. That is what "learns Spanish" means at 97 phrases: memorisation of a
+  phrase-to-answer mapping, not language.
 - **The pools are seeded groups of real neurons, not identified cell types.**
-- **`shuffled` preserves topology and misaligns the input/output interfaces**, so its failure
-  would be about interface alignment specifically. It did not fail, so the point is moot here.
 - **No task with time in it has been run.** Every input is a static prompt, which is exactly the
-  setting where a reservoir's memory cannot help and therefore cannot be shown to help.
+  setting where a reservoir's memory cannot help and therefore cannot be shown to help. This
+  remains the honest reason a wiring advantage might exist but be invisible here.
+
+## The rule this produced
+
+> A single final epoch from a single seed is not a measurement of a noisy training curve. Report
+> an average over epochs, vary the seed, and compare the effect against the seed-to-seed spread
+> before making a claim.
+
+A script must not hold two pre-written verdicts (one for "the wiring matters", one for "it does
+not") and choose between them on a 5-point threshold applied to one number. That is a claim
+generator, and it produced two false findings. `measure_plastic_brain.py` now averages over a
+tail of epochs, runs several seeds, pairs each seed's intact score against the same seed's
+controls so the seed's difficulty cancels, and refuses to make a claim when the effect does not
+clear the noise.
