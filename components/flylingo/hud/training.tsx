@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { HUD, Label, Meter, Spark, Stat } from "./primitives";
+import { HUD, Label, Meter, Spark } from "./primitives";
 
 /**
  * The training panel: what the fly is learning, and the reward that drives it.
@@ -84,11 +84,14 @@ export function HudTraining({
   const gain = early.length && late.length ? Math.max(...late) - mean(early) : 0;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, height: "100%" }}>
       {/* ---- what it is doing, and the controls ---- */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "0 0 auto" }}>
-        <Label tone={freshBrain ? "amber" : "cyan"} size={10}>
-          {freshBrain ? "learning from scratch" : "pretrained"}
+        {/* The training state lives in the panel header ("from scratch" / "pretrained"), so it
+            is stated once. Repeating it here as "already trained" put the same fact twice on one
+            screen, beside a "training on" button that reads as its opposite. */}
+        <Label tone="faint" size={10}>
+          weights update every answer
         </Label>
         <div style={{ flex: "1 1 auto" }} />
         <button
@@ -101,7 +104,7 @@ export function HudTraining({
             color: training ? HUD.bg : HUD.faint,
             border: `1px solid ${training ? HUD.cyan : HUD.line}`,
             borderRadius: 2,
-            fontSize: 9.5,
+            fontSize: 10.5,
             fontWeight: 700,
             letterSpacing: "0.1em",
             textTransform: "uppercase",
@@ -121,7 +124,7 @@ export function HudTraining({
             color: HUD.amber,
             border: `1px solid ${HUD.amber}`,
             borderRadius: 2,
-            fontSize: 9.5,
+            fontSize: 10.5,
             fontWeight: 700,
             letterSpacing: "0.1em",
             textTransform: "uppercase",
@@ -152,14 +155,14 @@ export function HudTraining({
           </span>
         </div>
         <div style={{ marginTop: 6 }}>
-          <Spark values={curve.length > 1 ? curve : [0, 0]} width={330} height={46} tone={HUD.cyan} />
+          <Spark values={curve.length > 1 ? curve : [0, 0]} width={330} height={30} tone={HUD.cyan} />
         </div>
         <div
           style={{
-            marginTop: 4,
+            marginTop: 3,
             display: "flex",
             justifyContent: "space-between",
-            fontSize: 10,
+            fontSize: 10.5,
             color: HUD.faint,
             fontVariantNumeric: "tabular-nums",
           }}
@@ -174,7 +177,6 @@ export function HudTraining({
           ) : (
             <span>collecting answers…</span>
           )}
-          <span>100%</span>
         </div>
       </div>
 
@@ -191,9 +193,8 @@ export function HudTraining({
         <div style={{ marginTop: 5 }}>
           <Meter value={dopamine} tone={HUD.amber} height={7} track="rgba(240,160,48,0.14)" />
         </div>
-        <div style={{ marginTop: 4, fontSize: 10, color: HUD.faint, lineHeight: 1.4 }}>
-          reward on a correct pick, withheld on a miss. This is the signal that gates the weight
-          update, so the bar and the learning above are the same event.
+        <div style={{ marginTop: 3, fontSize: 10.5, color: HUD.faint, lineHeight: 1.35 }}>
+          reward on a correct pick, withheld on a miss — it gates the weight update.
         </div>
       </div>
 
@@ -202,31 +203,39 @@ export function HudTraining({
         style={{
           flex: "0 0 auto",
           borderTop: `1px solid ${HUD.line}`,
-          paddingTop: 10,
+          paddingTop: 8,
         }}
       >
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
           <Label tone="faint" size={10}>
             course
           </Label>
-          <span style={{ fontSize: 10, color: HUD.faint, fontVariantNumeric: "tabular-nums" }}>
-            lesson {lessonPos + 1} / {lessonTotal}
+          <span
+            style={{
+              fontSize: 15,
+              fontWeight: 600,
+              color: HUD.text,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              minWidth: 0,
+            }}
+          >
+            {lessonTitle ?? "—"}
+          </span>
+          <span style={{ flex: "1 1 auto" }} />
+          <span
+            style={{
+              fontSize: 10.5,
+              color: HUD.faint,
+              fontVariantNumeric: "tabular-nums",
+              flex: "0 0 auto",
+            }}
+          >
+            {lessonPos + 1} / {lessonTotal}
           </span>
         </div>
-        <div
-          style={{
-            marginTop: 4,
-            fontSize: 14,
-            fontWeight: 600,
-            color: HUD.text,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {lessonTitle ?? "—"}
-        </div>
-        <div style={{ marginTop: 5 }}>
+        <div style={{ marginTop: 4 }}>
           <Meter
             value={lessonTotal ? (lessonPos + 1) / lessonTotal : 0}
             tone={HUD.cyan}
@@ -235,36 +244,49 @@ export function HudTraining({
         </div>
       </div>
 
-      {/* ---- the numbers behind it ---- */}
-      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", flex: "0 0 auto" }}>
-        <Stat label="learnt" value={`${learnedCorrect}/${learnedAnswered}`} size={18} tone="cyan" />
-        <Stat label="rehearsals" value={rehearsals.toLocaleString("en-US")} size={18} />
-        <Stat label="memory" value={`${replaySize} seen`} size={18} />
-        <Stat
-          label="entropy"
-          /* Clamped: a tiny negative value from floating point rendered as "-0.00". */
-          value={Math.abs(entropy) < 0.005 ? "0.00" : entropy.toFixed(2)}
-          size={18}
-        />
-        <Stat label="params" value={String(params)} size={18} />
-        <Stat
-          label="full laps"
-          /* Not "lessons done", which beside "lesson 7 / 15" looked like a contradiction: this
-             counts complete passes through the whole course, a different quantity. */
-          value={String(lessonsCompleted)}
-          size={18}
-          tone={lessonsCompleted > 0 ? "green" : "text"}
-        />
+      {/* ---- the numbers behind it, as one compact line ----
+          Six separate stat cells read as a research dashboard and crowded the panel past its
+          box. What a viewer can use is how much it has learnt and how much rehearsal that took;
+          entropy, parameters and full laps are kept in the title attribute and the README. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+          flex: "0 0 auto",
+          fontSize: 11.5,
+          color: HUD.faint,
+          fontVariantNumeric: "tabular-nums",
+        }}
+        title={`entropy ${Math.abs(entropy) < 0.005 ? "0.00" : entropy.toFixed(2)} · ${params} parameters · ${lessonsCompleted} full laps through the course`}
+      >
+        <span>
+          learnt{" "}
+          <span style={{ color: HUD.cyan, fontWeight: 700, fontSize: 15 }}>
+            {learnedCorrect}
+          </span>
+          /{learnedAnswered}
+        </span>
+        <span style={{ color: HUD.line }}>·</span>
+        <span>
+          {" "}
+          <span style={{ color: HUD.text, fontWeight: 700, fontSize: 15 }}>
+            {rehearsals.toLocaleString("en-US")}
+          </span>{" "}
+          rehearsals
+        </span>
+        <span style={{ color: HUD.line }}>·</span>
+        <span>{replaySize} remembered</span>
       </div>
 
-      <div style={{ flex: "1 1 auto", minHeight: 6 }} />
+      <div style={{ flex: "1 1 auto", minHeight: 0 }} />
 
       {/* ---- the honest caveat, kept on screen ----
           Tightened from five lines of 10px type to three of 11.5px: at recording scale the old
           block was unreadable, and an honesty note nobody can read is not doing its job. The two
           claims that must survive are kept explicitly: what is being trained, and that the
           connectome buys nothing measurable. */}
-      <div style={{ flex: "0 0 auto", fontSize: 11.5, color: HUD.faint, lineHeight: 1.5 }}>
+      <div style={{ flex: "0 0 auto", fontSize: 11.5, color: HUD.faint, lineHeight: 1.42 }}>
         {training ? (
           <>
             Supervised against the lesson&apos;s own answer key, with{" "}

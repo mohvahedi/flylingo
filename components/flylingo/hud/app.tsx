@@ -331,6 +331,10 @@ export function HudApp() {
     (flyProbs.length > 0
       ? flyProbs.reduce((best, p, i) => (p > flyProbs[best] ? i : best), 0)
       : -1);
+  /** The option text the fly is on right now: shown in the lesson panel's header. */
+  const pickedOption = flyChoice >= 0 ? (challenge?.options[flyChoice] ?? null) : null;
+  /** True once the answer has been scored, which is when "choosing" becomes "answered". */
+  const locked = Boolean(result) && status !== "none";
   const flyAcc = frame?.fly_accuracy ?? 0;
   const userAcc = frame?.accuracy ?? 0;
   const mode = frame?.mode ?? "intact";
@@ -357,12 +361,12 @@ export function HudApp() {
         {/* ---------------------------------------------------------------- header */}
         <header
           style={{
-            flex: "0 0 54px",
+            flex: "0 0 46px",
             display: "flex",
             alignItems: "center",
             gap: 16,
             borderBottom: `1px solid ${HUD.line}`,
-            paddingBottom: 12,
+            paddingBottom: 10,
           }}
         >
           <span style={{ fontSize: 26, fontWeight: 800, letterSpacing: "0.02em" }}>
@@ -516,10 +520,31 @@ export function HudApp() {
               pad={20}
               label="lesson · fly answers in real time"
               right={
-                <Label tone="faint">
-                  {answered}
-                  {total ? ` / ${total}` : ""} answered
-                </Label>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
+                  {/* The fly's choice lives in the header. It used to be a bordered block inside
+                      the panel, where it cost ~46px of the height the question needed -- and the
+                      header had the width to spare. Same information, zero column height. */}
+                  <Label tone="amber" size={11}>
+                    {locked ? "fly answered" : "fly is choosing"}
+                  </Label>
+                  <span
+                    style={{
+                      fontSize: 17,
+                      fontWeight: 700,
+                      color: pickedOption ? HUD.text : HUD.faint,
+                      maxWidth: 260,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {pickedOption ?? "—"}
+                  </span>
+                  <Label tone="faint">
+                    {answered}
+                    {total ? ` / ${total}` : ""} answered
+                  </Label>
+                </div>
               }
             >
             {bootError ? (
@@ -631,12 +656,15 @@ export function HudApp() {
         {/* ---------------------------------------------------------- lower third */}
         <div
           style={{
-            flex: "0 0 150px",
+            /* 150 -> 128: the lower third is a headline, a pipeline line and a control row, and
+               it was carrying 150px of a fixed 1080 frame. The body needed those 22px far more
+               than this tier needed the padding. */
+            flex: "0 0 110px",
             display: "grid",
             gridTemplateColumns: "1fr auto",
             gap: 24,
             borderTop: `1px solid ${HUD.line}`,
-            paddingTop: 16,
+            paddingTop: 14,
           }}
         >
           <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
@@ -724,12 +752,12 @@ export function HudApp() {
             {/* One instrument, not two. The trace used to sit in its own group labelled "state
                 rms" while a stat cell in the row beside it carried the same label and the same
                 value, so the tier read as two competing readouts. The trace and its number now
-                share a cell whose label matches the rest of the row (9.5px) and whose height
+                share a cell whose label matches the rest of the row (10.5px) and whose height
                 matches theirs (line box + 2 + 35), so the labels stay on one line. The wrapper
                 is a plain block on purpose: as a flex column it would blockify the label and
                 drop its baseline 5px below the row's. */}
             <div>
-              <Label tone="faint" size={9.5}>
+              <Label tone="faint" size={10.5}>
                 state rms
               </Label>
               <div
@@ -794,20 +822,15 @@ export function HudApp() {
             lineHeight: 1.5,
           }}
         >
-          <Label tone="faint" size={9.5}>
+          <Label tone="faint" size={10.5}>
             attribution
           </Label>
           <span style={{ flex: "1 1 auto", minWidth: 0 }}>
-            <span style={{ color: HUD.cyanPale }}>fly.glb</span> by victorberdugo1
-            (CC-BY-4.0). Handset{" "}
-            <span style={{ color: HUD.cyanPale }}>smartphone_with_green_screen.glb</span> by{" "}
-            <span style={{ color: HUD.cyanPale }}>peroroo</span> (CC-BY-SA-4.0, share-alike see
-            README). Wiring frozen; a 516-parameter readout learns the 97 phrases.{" "}
-            <span style={{ color: HUD.faint }}>
-              Measured: intact, shuffled, degree-matched random and the raw encoding with no
-              reservoir all reach the same accuracy, so the connectome confers no measurable
-              learning advantage on this task.
-            </span>
+            <span style={{ color: HUD.cyanPale }}>fly.glb</span> by victorberdugo1 (CC-BY-4.0).
+            Handset <span style={{ color: HUD.cyanPale }}>smartphone_with_green_screen.glb</span>{" "}
+            by <span style={{ color: HUD.cyanPale }}>peroroo</span> (CC-BY-SA-4.0, share-alike —
+            see README). Wiring frozen. The honesty statement on what trains, and on the
+            connectome conferring no measurable advantage, is in the panel above.
           </span>
         </div>
       </div>

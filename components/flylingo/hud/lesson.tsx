@@ -1,6 +1,6 @@
 "use client";
 
-import { HUD, Label, Meter, Chip, Stat } from "./primitives";
+import { HUD, Label, Meter, Chip } from "./primitives";
 
 import type { AnswerResult, ApiChallenge } from "@/lib/flylingo/types";
 
@@ -85,8 +85,6 @@ export function HudLesson({
     (flyProbs.length > 0
       ? flyProbs.reduce((best, p, i) => (p > flyProbs[best] ? i : best), 0)
       : -1);
-  const locked = Boolean(result) && status !== "none";
-  const pickedOpt = livePick >= 0 ? challenge.options[livePick] : null;
 
   const pct = Math.round(progress * 100);
 
@@ -132,65 +130,16 @@ export function HudLesson({
           justifyContent: "center",
         }}
       >
-        {/* the fly's live decision, shown before the user commits */}
-        <div
-          style={{
-            flex: "0 0 auto",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "15px 16px",
-            border: `1px solid ${locked ? HUD.lineStrong : "rgba(240,160,48,0.42)"}`,
-            borderRadius: 3,
-            background: locked ? HUD.panelAlt : "rgba(240,160,48,0.07)",
-          }}
-        >
-          <Label tone="amber" size={10}>
-            {locked ? "fly answered" : "fly is choosing"}
-          </Label>
-          <span
-            style={{
-              fontSize: 19,
-              fontWeight: 700,
-              color: pickedOpt ? HUD.text : HUD.faint,
-              flex: "1 1 auto",
-              minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {pickedOpt ?? "—"}
-          </span>
-          {pickedOpt && (
-            <span
-              style={{
-                fontVariantNumeric: "tabular-nums",
-                fontSize: 15,
-                fontWeight: 700,
-                color: HUD.cyanBright,
-              }}
-            >
-              {((flyProbs[livePick] ?? 0) * 100).toFixed(1)}%
-            </span>
-          )}
-          {locked && (
-            <Chip tone={result?.fly_correct ? "green" : "rose"}>
-              {result?.fly_correct ? "correct" : "wrong"}
-            </Chip>
-          )}
-        </div>
-
         {/* prompt */}
-        <div style={{ marginTop: 26, flex: "0 0 auto" }}>
+        <div style={{ flex: "0 0 auto" }}>
           <Label tone="faint">
             {challenge.type} · difficulty {challenge.difficulty}
           </Label>
           <h2
             style={{
-              margin: "12px 0 0",
-              fontSize: 38,
-              lineHeight: 1.22,
+              margin: "8px 0 0",
+              fontSize: 30,
+              lineHeight: 1.18,
               fontWeight: 700,
               letterSpacing: "-0.015em",
               color: HUD.text,
@@ -203,10 +152,10 @@ export function HudLesson({
         {/* options, each carrying the fly's own probability for that option */}
         <div
           style={{
-            marginTop: 28,
+            marginTop: 12,
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
-            gap: 16,
+            gap: 10,
             flex: "0 0 auto",
           }}
         >
@@ -235,8 +184,8 @@ export function HudLesson({
                   position: "relative",
                   display: "flex",
                   flexDirection: "column",
-                  gap: 13,
-                  padding: "28px 22px 24px",
+                  gap: 6,
+                  padding: "11px 16px 9px",
                   background: showState
                     ? status === "correct"
                       ? "rgba(74,222,128,0.10)"
@@ -254,7 +203,7 @@ export function HudLesson({
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
-                  <span style={{ fontSize: 23, fontWeight: 600, flex: "1 1 auto", minWidth: 0 }}>
+                  <span style={{ fontSize: 20, fontWeight: 600, flex: "1 1 auto", minWidth: 0 }}>
                     {opt}
                   </span>
                   {/* the fly's own number for THIS option, so the mapping is unambiguous */}
@@ -297,14 +246,6 @@ export function HudLesson({
           })}
         </div>
 
-        <div style={{ marginTop: 18, flex: "0 0 auto" }}>
-          {/* Shortened and enlarged: at recording scale the old two-line sentence was too small
-              to read, so the two marks it explains now fit one line. */}
-          <Label tone="faint" size={11.5}>
-            amber = the fly&apos;s pick · cyan = its softmax · 516-parameter readout over a frozen
-            connectome
-          </Label>
-        </div>
       </div>
 
       {/* The lesson's own record: one dot per question plus who is ahead. This is the
@@ -318,7 +259,7 @@ export function HudLesson({
           alignItems: "flex-end",
           justifyContent: "space-between",
           gap: 24,
-          marginTop: 16,
+          marginTop: 10,
         }}
       >
         <div>
@@ -341,8 +282,8 @@ export function HudLesson({
                       : `question ${i + 1}`
                   }
                   style={{
-                    width: 12,
-                    height: 12,
+                    width: 10,
+                    height: 10,
                     borderRadius: "50%",
                     background: h ? colour : "transparent",
                     border: `1px solid ${isNow ? HUD.amber : colour}`,
@@ -353,19 +294,23 @@ export function HudLesson({
             })}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 34 }}>
-          <Stat
-            label="fly score"
-            value={`${history.filter((h) => h.fly).length}/${answered}`}
-            tone="cyan"
-            size={22}
-          />
-          <Stat
-            label="your score"
-            value={`${history.filter((h) => h.user).length}/${answered}`}
-            tone="green"
-            size={22}
-          />
+        <div style={{ display: "flex", gap: 22, alignItems: "baseline" }}>
+          {/* Kept compact and inline: the lower third already reports "fly accuracy" and "you"
+              as percentages, so these two are a per-lesson tally, not a second headline. */}
+          <span style={{ fontSize: 11, color: HUD.faint }}>
+            fly{" "}
+            <span style={{ color: HUD.cyan, fontWeight: 700, fontSize: 15 }}>
+              {history.filter((h) => h.fly).length}
+            </span>
+            <span style={{ color: HUD.faint }}>/{answered}</span>
+          </span>
+          <span style={{ fontSize: 11, color: HUD.faint }}>
+            you{" "}
+            <span style={{ color: HUD.green, fontWeight: 700, fontSize: 15 }}>
+              {history.filter((h) => h.user).length}
+            </span>
+            <span style={{ color: HUD.faint }}>/{answered}</span>
+          </span>
         </div>
       </div>
 
@@ -378,7 +323,7 @@ export function HudLesson({
           justifyContent: "space-between",
           gap: 16,
           borderTop: `1px solid ${HUD.line}`,
-          paddingTop: 14,
+          paddingTop: 8,
         }}
       >
         <div style={{ minWidth: 0 }}>
@@ -401,7 +346,7 @@ export function HudLesson({
           onClick={onCheck}
           style={{
             flex: "0 0 auto",
-            padding: "12px 26px",
+            padding: "10px 22px",
             background:
               status === "correct" ? HUD.green : status === "wrong" ? HUD.rose : HUD.amber,
             color: HUD.bg,

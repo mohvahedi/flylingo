@@ -178,7 +178,21 @@ export function Panel({
           {right}
         </header>
       )}
-      <div style={{ flex: "1 1 auto", minHeight: 0, padding: bodyPad ?? pad }}>{children}</div>
+      {/* `overflow: hidden` is a structural safety net, not a style choice. These panels are
+          fixed-height boxes in a fixed 1920x1080 frame, and when content grew past its box it
+          painted straight over the panel below -- which is what made text from the training
+          panel collide with the lower-third metrics row. Content is now sized to fit as well,
+          but a panel should never be able to escape its own border. */}
+      <div
+        style={{
+          flex: "1 1 auto",
+          minHeight: 0,
+          overflow: "hidden",
+          padding: bodyPad ?? pad,
+        }}
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -200,7 +214,9 @@ export function Stat({
       : tone === "green" ? HUD.green : tone === "rose" ? HUD.rose : HUD.text;
   return (
     <div style={{ minWidth: 0 }}>
-      <Label size={9.5}>{label}</Label>
+      {/* 10.5 rather than 9.5: at recording scale every Stat label in the frame was the
+          smallest type on screen, and the labels are what make the numbers mean anything. */}
+      <Label size={10.5}>{label}</Label>
       <div
         style={{
           fontSize: size,
