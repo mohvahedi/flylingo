@@ -5,6 +5,59 @@ a plan of record. Everything below was verified at the time of writing.
 
 ---
 
+## 0. THE ANSWER — the wiring does not matter (2026-09-13, attempt 5)
+
+The four-arm comparison finally ran on a **verified** accelerated path. Two machines, two budgets,
+same conclusion.
+
+**Colab T4, 40 epochs, 5 seeds** (`artifacts/colab_results/`, score = mean of last 10 epochs):
+
+| arm | mean | sd | intact − this arm | sd of that gap |
+|---|---|---|---|---|
+| **intact** (real connectome) | **87.7%** | 1.8% | — | — |
+| shuffled | 88.2% | 2.3% | **−0.5%** | 2.1% |
+| random_graph | 87.0% | 1.9% | **+0.7%** | 1.7% |
+| no_edges | 21.6% | 0.0% | — | — |
+
+```
+paired per seed:
+ seed   intact  shuffled   random     best ctl     gap
+    1   87.2%    87.4%     85.9%      87.4%      -0.2%
+    2   89.2%    85.8%     90.4%      90.4%      -1.2%
+    3   84.8%    86.2%     86.2%      86.2%      -1.3%
+    4   87.3%    89.7%     84.9%      89.7%      -2.4%
+    5   90.0%    91.8%     87.4%      91.8%      -1.8%
+intact leads the best control on 0/5 seeds.
+```
+
+**Local CPU, 12 epochs, 3 seeds** (`brain/runs/plastic_brain/colab_measure.json`): intact 63.7%,
+shuffled 62.8%, random_graph 64.3%, no_edges 21.6%; intact leads on 1/3 seeds. Same tie.
+
+**Read it correctly.** Against each control *separately*, the real connectome is inside the noise:
+−0.5% against the shuffle and +0.7% against the random graph, each against a spread of 1.7–2.1
+points. The "−1.4% versus the best control" in the headline is **not** a finding either, and it is
+partly an artifact of the comparison itself: `best control` is a `max()` over two noisy arms, which
+biases the denominator upward. Do not report it as "the real wiring is worse".
+
+**What IS established:** a recurrent graph is **required**. The edge-free control sits at 21.6% — the
+majority-class baseline is 26.8% and uniform chance is 25.0% — while every connected arm reaches
+63–88%. Disconnecting the brain destroys the behaviour; which connected graph you use does not
+measurably matter.
+
+**Verified, not asserted.** All 20 Colab checkpoints were re-loaded on this machine (a different
+host from the VM that trained them) and their accuracy recomputed from scratch:
+**20/20 reproduce the reported number exactly** (`brain/scripts/verify_colab_results.py`).
+
+**This is attempt 1's conclusion, now properly supported.** The read-out was the ceiling then; the
+accelerator was corrupting the weights until §3; with both fixed, the answer is unchanged. The 15
+epoch table in §7 and the retracted claims in §3 were all pointing at this.
+
+**What is still not claimed:** anything about *why* the wiring does not matter, and anything about
+language. This remains memorisation of a 97-item phrase-to-answer mapping — every phrase is shown
+every epoch — and that caveat belongs wherever the number is shown.
+
+---
+
 ## 1. What this project is
 
 A fruit-fly brain — the real Janelia/Google **MaleCNS v1.0** connectome, 166,700 neurons and
