@@ -259,22 +259,24 @@ export function HudTraining({
 
       <div style={{ flex: "1 1 auto", minHeight: 6 }} />
 
-      {/* ---- the honest caveat, kept on screen ---- */}
-      <div style={{ flex: "0 0 auto", fontSize: 10, color: HUD.faint, lineHeight: 1.45 }}>
+      {/* ---- the honest caveat, kept on screen ----
+          Tightened from five lines of 10px type to three of 11.5px: at recording scale the old
+          block was unreadable, and an honesty note nobody can read is not doing its job. The two
+          claims that must survive are kept explicitly: what is being trained, and that the
+          connectome buys nothing measurable. */}
+      <div style={{ flex: "0 0 auto", fontSize: 11.5, color: HUD.faint, lineHeight: 1.5 }}>
         {training ? (
           <>
-            Each answer trains the 516-parameter readout supervised against the lesson&apos;s own
-            answer key, with {rehearsals.toLocaleString("en-US")} rehearsal steps taken from the
-            examples it has already seen. That is memorisation of the phrase-to-answer mapping,
-            which is what this readout was measured to be good at. The connectome contributes no
-            measurable learning advantage on this task: intact, shuffled, degree-matched random
-            and the raw encoding with no reservoir all reach the same accuracy.
+            Supervised against the lesson&apos;s own answer key, with{" "}
+            {rehearsals.toLocaleString("en-US")} rehearsal steps from what it has already seen:
+            memorisation of the phrase-to-answer mapping. The connectome confers{" "}
+            <span style={{ color: HUD.dim }}>no measurable learning advantage</span> — intact,
+            shuffled, random and no recurrence all reach the same accuracy.
           </>
         ) : (
           <>
             Training is OFF, so the weights are frozen and the curve above should flatten. This is
-            the control: the same lesson, the same connectome, the same readout, with the
-            plasticity disabled.
+            the control: same lesson, same connectome, same readout, plasticity disabled.
           </>
         )}
       </div>

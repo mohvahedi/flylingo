@@ -298,9 +298,11 @@ export function HudLesson({
         </div>
 
         <div style={{ marginTop: 18, flex: "0 0 auto" }}>
-          <Label tone="faint" size={10.5}>
-            amber bar = the fly&apos;s pick · cyan = its softmax over your options · 516-parameter
-            readout over a frozen connectome
+          {/* Shortened and enlarged: at recording scale the old two-line sentence was too small
+              to read, so the two marks it explains now fit one line. */}
+          <Label tone="faint" size={11.5}>
+            amber = the fly&apos;s pick · cyan = its softmax · 516-parameter readout over a frozen
+            connectome
           </Label>
         </div>
       </div>

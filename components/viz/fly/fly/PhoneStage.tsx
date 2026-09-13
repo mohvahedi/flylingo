@@ -43,6 +43,28 @@ import {
 } from './duolingoScreen';
 
 /**
+ * Read a framing override from the URL, so the composition can be swept against measured
+ * margins rather than nudged by eye. `?cam=0,9,17&tgt=0,4,0&fov=38`.
+ */
+function camParam(name: string, fallback: number): number {
+  if (typeof window === "undefined") return fallback;
+  const raw = new URLSearchParams(window.location.search).get(name);
+  if (raw === null) return fallback;
+  const parts = raw.split(",");
+  const v = Number(parts[0]);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+function camVec(name: string, x: number, y: number, z: number): [number, number, number] {
+  if (typeof window === "undefined") return [x, y, z];
+  const raw = new URLSearchParams(window.location.search).get(name);
+  if (raw === null) return [x, y, z];
+  const p = raw.split(",").map(Number);
+  if (p.length !== 3 || p.some((n) => !Number.isFinite(n))) return [x, y, z];
+  return [p[0], p[1], p[2]];
+}
+
+/**
  * The physical layout. Kept in one place so the framing can be tuned from a screenshot
  * without hunting through the scene graph.
  */
@@ -190,9 +212,23 @@ export const LAYOUT = {
    * off the screen. Held at 17.6 rather than 15.6 because the hero panel is wide and the tighter
    * framing read as cramped.
    */
-  camera: [0.4, 9.0, 17.6] as [number, number, number],
-  target: [0.4, 4.2, 0.6] as [number, number, number],
-  fov: 38,
+  /**
+   * A three-quarter view from the left, which is what keeps the fly off the phone.
+   *
+   * The problem this solves, measured: from a head-on camera the fly's wingspan spans the whole
+   * frame (it is five world units nearer the lens than the handset) and lays itself straight
+   * across the phone's screen, hiding the question, while the handset's lower edge falls outside
+   * the frame. Raising the camera did not help, it made it worse: the fly grew from 12.5% to
+   * 21.8% of the panel and the visible phone fell from 13.3% to 8.8%.
+   *
+   * Moving the camera round to the side foreshortens the wings instead. Swept over six azimuths
+   * and measured by the phone's VISIBLE area, this one leaves the most screen readable, 16.1%
+   * of the panel against 12.7% head-on, with the fly still dominant. The question text and all
+   * four options read clearly, and the fly's foreleg still reaches in toward the answer.
+   */
+  camera: camVec("cam", 5.0, 8.0, 14.6),
+  target: camVec("tgt", 1.2, 3.9, 0.6),
+  fov: Number(camParam("fov", 38)),
 };
 
 /** Fallback only. The real scale is measured from the loaded asset; see PhoneScreen. */
@@ -1123,7 +1159,10 @@ export function PhoneStage(props: PhoneStageProps) {
         target={LAYOUT.target}
         enablePan={false}
         minDistance={3}
-        maxDistance={16}
+        /* Was 16, which silently clamped the shot: OrbitControls pulled any camera further out
+           back to 16, so framing changes past that distance had no effect at all. Raised to 60
+           so the composition is not fighting a control constraint. */
+        maxDistance={60}
         maxPolarAngle={Math.PI / 2.05}
       />
     </Canvas>

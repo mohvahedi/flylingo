@@ -50,6 +50,17 @@ function ViewLoading({ label }: { label: string }) {
 
 const MODES: Mode[] = ["intact", "shuffled", "random_graph", "no_edges"];
 
+/**
+ * Cadence of the hands-off demo, in milliseconds.
+ *
+ * These are pacing, not padding: a viewer has to watch the fly settle onto its answer and the
+ * reward trace fire before the card is replaced, or the sequence reads as numbers changing
+ * rather than a creature deciding. THINK_MS covers the flight and the reach animation;
+ * SETTLE_MS covers the dopamine decaying from 0.60 to 0.17 so the reward is actually seen.
+ */
+const THINK_MS = 3200;
+const SETTLE_MS = 2000;
+
 export function HudApp() {
   const { frame, status: streamStatus } = useBrainStream();
   const { health } = useServiceHealth();
@@ -67,6 +78,11 @@ export function HudApp() {
       fly and the user separately, because the whole point of the demo is that they differ. */
   const [history, setHistory] = useState<{ user: boolean; fly: boolean }[]>([]);
   const [bootError, setBootError] = useState<string | null>(null);
+  /** Hands-off mode: the fly answers for itself. On by default, because the frame exists to be
+      watched -- a demo where nothing moves until someone clicks is not a demo. */
+  const [autoDemo, setAutoDemo] = useState(true);
+  /** Counts completed turns of the hands-off loop; the loop re-arms on each increment. */
+  const [cycle, setCycle] = useState(0);
   const [modeBusy, setModeBusy] = useState(false);
   const [trainBusy, setTrainBusy] = useState(false);
   const [rmsHistory, setRmsHistory] = useState<number[]>([]);
@@ -94,8 +110,12 @@ export function HudApp() {
       setHistory([]);
       try {
         const cur = await api.curriculum();
-        const lesson = cur.units.flatMap((u) => u.lessons).find((l) => l.id === s.lesson_id);
-        setTotal(lesson?.challenges.length ?? 0);
+        // Keep the whole course to hand: the lesson size has to be re-read every time the
+        // course advances, not just at boot.
+        const sizes = new Map<string, number>();
+        for (const u of cur.units) for (const l of u.lessons) sizes.set(l.id, l.challenges.length);
+        lessonSizes.current = sizes;
+        setTotal(sizes.get(s.lesson_id) ?? 0);
       } catch {
         setTotal(0);
       }
@@ -107,6 +127,21 @@ export function HudApp() {
   useEffect(() => {
     void start();
   }, [start]);
+
+  /**
+   * The current challenge, readable from inside the hands-off loop.
+   *
+   * The loop must not depend on `challenge` directly: it sets the challenge itself at the end of
+   * every cycle, so a `challenge` dependency would re-run the effect mid-cycle and submit the
+   * answer twice. Reading it through a ref keeps the loop sequential while still seeing the
+   * latest value.
+   */
+  const challengeRef = useRef<ApiChallenge | null>(null);
+  challengeRef.current = challenge;
+  /** Lesson id -> its challenge count, so the counter can follow the course as it advances. */
+  const lessonSizes = useRef<Map<string, number>>(new Map());
+  /** The lesson the counter currently describes, so a change resets it exactly once. */
+  const countedLesson = useRef<string | null>(null);
 
   const onCheck = useCallback(async () => {
     if (!session || !challenge) return;
@@ -138,6 +173,93 @@ export function HudApp() {
       setPending(false);
     }
   }, [session, challenge, selected, status, result]);
+
+  /**
+   * The hands-off loop: think, choose, answer, settle, next question.
+   *
+   * Written as one strictly sequential cycle rather than as timers keyed on `status`. The
+   * status-driven version overlapped: setting `pending` changed `flyTakeTurn`'s identity, which
+   * re-ran the effect while the first request was still in flight, so two answers were submitted
+   * for one challenge and the server answered the loser with HTTP 409 "challenge is not current".
+   * One answer per cycle, and the next cycle starts only after the previous one has finished.
+   *
+   * The delays are the point rather than padding. A viewer has to see the fly settle on the
+   * answer and the reward trace fire before the card is replaced, or the whole thing reads as
+   * numbers changing rather than a creature making a decision. THINK_MS covers the reach
+   * animation; SETTLE_MS covers the dopamine decaying.
+   *
+   * A wrong answer keeps the same challenge current, which is the lesson flow (miss, then
+   * retry), so the next cycle simply re-attempts it.
+   */
+  useEffect(() => {
+    if (!autoDemo || !session) return;
+    let cancelled = false;
+    const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
+
+    const run = async () => {
+      const ch = challengeRef.current;
+      if (!ch) {
+        await sleep(600);
+        if (!cancelled) setCycle((c) => c + 1);
+        return;
+      }
+
+      await sleep(THINK_MS);
+      if (cancelled) return;
+
+      let res: AnswerResult;
+      try {
+        res = await api.answer(session.session_id, ch.id, -1, true);
+      } catch {
+        if (cancelled) return;
+        // Retry the same challenge on the next cycle rather than spinning here.
+        await sleep(900);
+        if (!cancelled) setCycle((c) => c + 1);
+        return;
+      }
+      if (cancelled) return;
+
+      setResult(res);
+      setStatus(res.correct ? "correct" : "wrong");
+      setHearts(res.hearts);
+      setAnswered((n) => n + 1);
+      setHistory((h) => [...h, { user: res.correct, fly: res.fly_correct }]);
+      // Deliberately NOT setting `selected`: that paints the cyan "your pick" bar, and in the
+      // hands-off demo nobody picked. The fly's choice is drawn in amber from `flyChoice`, so
+      // the two marks keep meaning what they say.
+
+      await sleep(SETTLE_MS);
+      if (cancelled) return;
+
+      if (res.next_challenge) setChallenge(res.next_challenge);
+      setSelected(undefined);
+      setStatus("none");
+      setCycle((c) => c + 1);
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [autoDemo, session, cycle]);
+
+  /**
+   * Keep the counter describing the lesson that is actually on screen.
+   *
+   * The header used to read "19 / 7 answered": `total` was read once at boot from the first
+   * lesson while `answered` kept climbing across lessons, so the denominator went stale and the
+   * number was impossible. Following the course here fixes the fraction and gives the lesson
+   * dot-track the right number of dots.
+   */
+  useEffect(() => {
+    const id = frame?.lesson_id;
+    if (!id || countedLesson.current === id) return;
+    if (!lessonSizes.current.has(id)) return;
+    countedLesson.current = id;
+    setTotal(lessonSizes.current.get(id) ?? 0);
+    setAnswered(0);
+    setHistory([]);
+  }, [frame?.lesson_id]);
 
   // Duolingo-style number-key selection.
   useEffect(() => {
@@ -554,6 +676,24 @@ export function HudApp() {
               <span style={{ color: HUD.cyan }}>argmax</span>
             </div>
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setAutoDemo((v) => !v)}
+                style={{
+                  padding: "4px 10px",
+                  background: autoDemo ? HUD.green : "transparent",
+                  color: autoDemo ? HUD.bg : HUD.faint,
+                  border: `1px solid ${autoDemo ? HUD.green : HUD.line}`,
+                  borderRadius: 2,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                  cursor: "pointer",
+                }}
+              >
+                {autoDemo ? "fly is playing" : "paused"}
+              </button>
               {MODES.map((m) => (
                 <button
                   key={m}

@@ -45,11 +45,19 @@ export const api = {
       lesson_id: lessonId ?? null,
       fresh: opts?.fresh ?? false,
     }),
-  answer: (sessionId: string, challengeId: string, choiceIndex: number) =>
+  /**
+   * Submit an answer.
+   *
+   * `asFly` is for the hands-off demo: the fly answers with its own sampled action and the
+   * lesson advances on that, so the frame runs by itself. Without it the human's click is what
+   * counts and the fly is scored separately.
+   */
+  answer: (sessionId: string, challengeId: string, choiceIndex: number, asFly = false) =>
     post<AnswerResult>("/answer", {
       session_id: sessionId,
       challenge_id: challengeId,
       choice_index: choiceIndex,
+      as_fly: asFly,
     }),
   control: (mode: Mode) => post<{ mode: Mode; note: string }>("/control", { mode }),
   reset: () => post<{ ok: boolean }>("/reset", {}),

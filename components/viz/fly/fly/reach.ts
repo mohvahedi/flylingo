@@ -55,7 +55,13 @@ export type ReachTune = {
  */
 export const REACH: ReachTune = {
   extend: 0.36,
-  hold: 1.15,
+  // 2.8, so the foreleg is still on the card while the answer registers and the reward fires.
+  //
+  // The timeline this lines up with: the flight is 1.6s, so the reach runs from 1.6s, and the
+  // HUD submits the answer at 3.2s and shows the result until 5.2s. At the old 1.15 the reach
+  // ended at 3.66s, so for most of the reward window the fly had already withdrawn its leg and
+  // the shot no longer showed what it had chosen. 2.6 puts the hold across the whole moment.
+  hold: 2.8,
   settle: 0.55,
   femur: -0.55,
   knee: -0.35,
