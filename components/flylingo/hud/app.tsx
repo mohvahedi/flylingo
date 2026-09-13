@@ -362,7 +362,7 @@ export function HudApp() {
                     }}
                   >
                     <Label tone="faint" size={10.5}>
-                      male cns v1.0 · measured connectome
+                      male cns v1.0 · brain + vnc · measured
                     </Label>
                     <div style={{ display: "flex", gap: 18 }}>
                       <LegendDot swatch={HUD.cyan}>measured soma</LegendDot>
