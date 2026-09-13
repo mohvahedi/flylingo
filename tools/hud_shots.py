@@ -227,4 +227,10 @@ out['scenarios'] = {
     'zero_props_renders': out['shots']['hud-cloud-zero-props.png']['lit_pct'] > 3.0,
 }
 out['finished_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+# Persist as well as print. This script previously only printed its result, so
+# artifacts/hud_shots.json kept whatever an older run had left there, and a
+# reader measuring that file was measuring a stale build: it still held warm_px
+# 0 and no_edges 12.87 percent long after both had changed. File and stdout now
+# come from the same `out` dict in the same run.
+(ART / 'hud_shots.json').write_text(json.dumps(out, indent=1), encoding='utf-8')
 print(json.dumps(out, indent=1))

@@ -40,6 +40,20 @@ function markUploaded(attr: THREE.BufferAttribute, count: number, itemSize: numb
  */
 const SPIKE_FLASH_SECONDS = 0.16;
 
+/**
+ * Minimum number of RENDERED frames a fresh spike stays pinned at full amber
+ * after the last frame that reported it. SPIKE_FLASH_SECONDS decays in wall
+ * clock, which is correct at 60 fps but not sufficient on its own: the headless
+ * software rasteriser runs at roughly 5-25 fps and the telemetry reports spikes
+ * in bursts, so a capture could still land on a frame whose flash had already
+ * decayed (measured warm_px 0 with spikeCount 0 in 3 of 10 consecutive panel
+ * captures, and 0 in every capture of the earlier run). Holding at full for a
+ * fixed frame count makes the accent survive regardless of frame rate; the cost
+ * is a longer tail on a slow renderer (12 frames is 0.2 s at 60 fps, ~1.2 s at
+ * 10 fps), which is the price of the accent being legible at all.
+ */
+const SPIKE_HOLD_FRAMES = 12;
+
 // ---------------------------------------------------------------------------
 // Caption figures. Every number here is measured and is quoted from
 // public/data/layout_meta.json: 166,700 retained MaleCNS v1.0 neurons,
@@ -179,6 +193,7 @@ function Cloud({
   const controlsRef = useRef<OrbitControls | null>(null);
   const lastFrameTime = useRef(0);
   const shockState = useRef(new Float32Array(LIVE_SLOTS));
+  const shockHold = useRef(new Float32Array(LIVE_SLOTS));
   const lastSpikeKey = useRef('');
   void lastSpikeKey;
   const refScratch = useRef(new Float32Array(LIVE_SLOTS));
@@ -303,7 +318,7 @@ function Cloud({
           uGate: { value: 0 },
           uPos: { value: new THREE.Color('#7fe0ea') },
           uNeg: { value: new THREE.Color('#6fa6de') },
-          uShockColor: { value: new THREE.Color('#f0a030') },
+          uShockColor: { value: new THREE.Color('#ff9418') },
           uToneGain: { value: 1.45 },
         },
         transparent: true,
@@ -637,7 +652,10 @@ function Cloud({
       // leaves it.
       for (let k = 0; k < spiked.length; k += 1) {
         const s = spiked[k];
-        if (s >= 0 && s < LIVE_SLOTS) shockState.current[s] = 1;
+        if (s >= 0 && s < LIVE_SLOTS) {
+          shockState.current[s] = 1;
+          shockHold.current[s] = SPIKE_HOLD_FRAMES;
+        }
       }
       for (let s = 0; s < LIVE_SLOTS; s += 1) {
         const idx = s < liveIndices.length ? liveIndices[s] : -1;
@@ -647,7 +665,14 @@ function Cloud({
         // Real-time decay, so the amber flash lasts the same wall-clock
         // time at 30 fps and at 300 fps.
         if (shockState.current[s] > 0) {
-          shockState.current[s] *= Math.exp(-dtSec / SPIKE_FLASH_SECONDS);
+          if (shockHold.current[s] > 0) {
+            // Pinned at full strength for a fixed number of rendered frames, so
+            // a slow rasteriser cannot decay the one accent colour away between
+            // captures. Wall-clock decay still applies once the hold expires.
+            shockHold.current[s] -= 1;
+          } else {
+            shockState.current[s] *= Math.exp(-dtSec / SPIKE_FLASH_SECONDS);
+          }
         }
         if (shockState.current[s] < 0.004) shockState.current[s] = 0;
       }
@@ -708,7 +733,7 @@ function Cloud({
     // 0.012 is a 4.6x cut on the ambient term only, which leaves the live frame
     // untouched and its own measured bright.
     const liveFrame = refValue.current > 0;
-    staticMat.uniforms.uQuiet.value = liveFrame ? 1 : 0.012;
+    staticMat.uniforms.uQuiet.value = liveFrame ? 1 : 0.055; // AB-TEMP
     staticMat.uniforms.uClassMix.value = 1;
     staticMat.uniforms.uToneGain.value = 1.15;
     staticMat.uniforms.uFogNear.value = 1.5;

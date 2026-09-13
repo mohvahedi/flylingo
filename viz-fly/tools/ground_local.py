@@ -2,19 +2,24 @@
 
 The question this answers: does the fly read as standing ON a lit surface, or floating in a
 void? The eye judges that by LOCAL contrast - how much darker the shadow is than the lit
-ground immediately beside it - so hand-placed boxes are the wrong instrument: the 17%
-figure in HANDOFF_grounding.md came from a box pair that was placed in the near floor
-beside the fly's legs rather than in the shadow at all (see the note in that file).
+ground immediately beside it - so hand-placed boxes are the wrong instrument. The 17% figure
+in HANDOFF_grounding.md came from a box pair that had been placed in the near floor beside the
+fly's legs rather than in the shadow at all (the BOX table was documented (x0,x1,y0,y1) and
+unpacked the other way round, and the void boxes fell outside the frame, which is why that row
+read nan).
 
-This probe locates the shadow footprint from the data instead:
+This probe locates the darkening from the data instead. It shoots the same frozen frame in
+three states and differences them:
 
-  1. shoot the same frozen frame twice, shadow rig ON and OFF (?noshadow), N frames each
-  2. the temporal spread of each set is the noise floor of any A/B difference
-  3. the footprint is the set of GROUND pixels that the shadow darkens by more than that
-     noise floor; ground pixels are the ones neither frame paints as bright fly body
-  4. `under`  = mean luma of the footprint with shadows ON
-     `beside` = mean luma of the lit ring around the footprint, same frame
-     `contrast` = (beside - under) / beside
+  shipped          the frame as it ships
+  pool off         uPoolStrength = 0 on the live ground material: the contact pool alone
+  ?noshadow        the whole shadow rig off: the key light does not cast, no contact patches
+
+Each difference is the set of pixels that state removes, restricted to ground pixels (neither
+frame paints them as bright fly body). For each one it reports the mean luma inside the
+footprint and on the lit ring just outside it:
+
+  contrast = (beside - under) / beside
 
   void      the band above the slab's far lip, which must stay near black
   profile   vertical luma strip through the fly's own column
@@ -25,21 +30,20 @@ import sys
 from io import BytesIO
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from playwright.sync_api import sync_playwright
 
 BASE = 'http://localhost:5191/?frozen'
 SHOTS = 3
-args = [a for a in sys.argv[1:]]
+args = list(sys.argv[1:])
 if args and not args[0].startswith('--'):
     BASE = args.pop(0)
 if '--shots' in args:
     SHOTS = int(args[args.index('--shots') + 1])
 
 ART = 'D:/Projects/flylingo/artifacts'
-BG = (8, 12, 17)          # gl.setClearColor('#080c11')
-FLY_LUMA = 70             # above this is fly body / legs / bloom, not ground
-SHADOW_DELTA = 6          # luma the shadow must remove before a pixel counts as shadowed
+FLY_LUMA = 70             # above this is fly body / legs / bloom, not slab
+DELTA = 6                 # luma a state must remove before a pixel counts as darkened
 RAMP = ' .:-=+*#%@'
 
 LAUNCH_ARGS = [
@@ -50,8 +54,8 @@ LAUNCH_ARGS = [
 ]
 
 # Hide every DOM overlay in the shot: walk from the canvas up to <body> and hide each
-# ancestor's other children. The previous probe hid the canvas's *siblings*, which is the
-# same element as the canvas, so the badge and the dev strip stayed in the frame.
+# ancestor's other children. Hiding the canvas's *siblings* hides nothing, because the canvas
+# is the only child of its own R3F container; the badge and the dev strip are siblings of that.
 HIDE_JS = """(() => {
   const cv = document.querySelector('canvas');
   let el = cv, n = 0;
@@ -66,6 +70,14 @@ HIDE_JS = """(() => {
   return n;
 })()"""
 
+POOL_OFF_JS = """(v) => {
+  const g = window.__flyScene.getObjectByName('ground');
+  const u = g && g.material && g.material.userData && g.material.userData.uniforms;
+  if (!u || !u.uPoolStrength) return 'no uPoolStrength';
+  u.uPoolStrength.value = v;
+  return 'uPoolStrength=' + v;
+}"""
+
 
 def luma(png):
     a = np.asarray(Image.open(BytesIO(png)).convert('RGB'), dtype=np.int32)
@@ -74,31 +86,13 @@ def luma(png):
 
 def annotate(png, text):
     im = Image.open(BytesIO(png)).convert('RGB')
-    from PIL import ImageDraw
     ImageDraw.Draw(im).text((12, 8), text, fill=(255, 80, 80))
     out = BytesIO()
     im.save(out, format='PNG')
     return out.getvalue()
 
 
-def shoot_all(page, tag):
-    """N frames of one state, plus the hero PNG of the first."""
-    frames = []
-    for i in range(SHOTS):
-        if i == 0:
-            png = page.locator('canvas').first.screenshot()
-            with open('%s/viz-fly-%s.png' % (ART, tag), 'wb') as fh:
-                fh.write(png)
-        else:
-            png = page.locator('canvas').first.screenshot()
-        frames.append(luma(png))
-        page.wait_for_timeout(700)
-    stack = np.stack(frames)
-    return stack.mean(axis=0), stack
-
-
 def dilate(mask, k):
-    """Cheap square dilation by k pixels, via shifted ORs (k small)."""
     out = mask.copy()
     for d in range(1, k + 1):
         out |= np.roll(mask, d, 0) | np.roll(mask, -d, 0)
@@ -106,7 +100,7 @@ def dilate(mask, k):
     return out
 
 
-def show(l, title, step=18, cw=20, mark=None, mk='S'):
+def show(l, title, step=20, cw=20, mark=None, mk='X'):
     print(title)
     for y in range(0, l.shape[0], step):
         line = ''
@@ -117,122 +111,178 @@ def show(l, title, step=18, cw=20, mark=None, mk='S'):
                 ch = mk
             line += ch
         print('%4d %s' % (y, line))
-    print('   cells: %s  [%s = shadow footprint]' % (
-        '. <12  : 12-24  - 24-36  = 36-48  + 48-60  * 60-72  # 72-84  %% 84-96  @ >96', mk))
+    print('   . <12  : 12-24  - 24-36  = 36-48  + 48-60  * 60-72  # 72-84  %% 84-96  @ >96'
+          '   [%s = removed by the named state]' % mk)
     print()
+
+
+class Shot:
+    def __init__(self, page, tag):
+        self.frames = []
+        for i in range(SHOTS):
+            png = page.locator('canvas').first.screenshot()
+            if i == 0:
+                with open('%s/viz-fly-%s.png' % (ART, tag), 'wb') as fh:
+                    fh.write(png)
+            self.frames.append(luma(png))
+            page.wait_for_timeout(700)
+        st = np.stack(self.frames)
+        self.mean = st.mean(axis=0)
+        self.noise = float(np.abs(st[0] - st[-1]).mean())
+
+
+def contrast(name, shipped, other, ground, bright, l):
+    """Report the footprint `other` removes relative to the shipped frame.
+
+    `under` is the DEEP part of the footprint (pixels this state darkens by more than 10
+    luma), not the dilated outline: averaging over a dilated mask mixes in pixels the state
+    does not touch and understates the darkening by an order of magnitude. `beside` is the
+    2..8 px band around that footprint, which is what "immediately beside it" means to the
+    eye. Both are read off the shipped frame, so this is a spatial contrast, not an A/B.
+    """
+    s, o = shipped.mean, other.mean
+    # the footprint is where the ABLATED state is brighter, i.e. the pixels the state under test
+    # is darkening. The opposite sign selects pixels the shipped frame happens to be brighter on
+    # for unrelated reasons, which is how a box pair can report a confident wrong number.
+    d = o - s
+    core = (d > 10) & ground & ~bright
+    foot = dilate(core, 2) & ground & ~bright
+    ring = dilate(foot, 8) & ~dilate(foot, 2) & ground & ~bright
+    print('== %s ==' % name)
+    if core.sum() < 200:
+        print('   no footprint found (%d px): nothing measurable is being removed' % core.sum())
+        print()
+        return
+    ys, xs = np.where(core)
+    under = float(s[core].mean())
+    beside = float(s[ring].mean())
+    print('   footprint %6d px   x %4d..%4d  y %4d..%4d  centroid (%4d,%4d)'
+          % (core.sum(), xs.min(), xs.max(), ys.min(), ys.max(), xs.mean(), ys.mean()))
+    print('   removed where it lands: %.2f luma -> %.2f luma (%.1f%% darker)'
+          % (float(o[core].mean()), under,
+             (float(o[core].mean()) - under) / max(float(o[core].mean()), 1e-6) * 100.0))
+    print('   under the darkening   %6.2f  (deep pixels only)' % under)
+    print('   surface beside it     %6.2f  (2..8 px band around it)' % beside)
+    print('   LOCAL CONTRAST        %6.1f%% darker than the surface immediately beside it'
+          % ((beside - under) / beside * 100.0))
+    print('   signal / noise        %6.1fx the temporal noise floor (%.2f luma)'
+          % ((beside - under) / max(shipped.noise, 1e-6), shipped.noise))
+    print('   (only the darkening matters here; the fly walks between frames, so the')
+    print('    noise floor is measured on slab pixels that exclude the fly)')
+    print()
+    return foot
 
 
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(args=LAUNCH_ARGS)
         page = browser.new_page(viewport={'width': 1440, 'height': 900})
-        on_url = BASE
-        off_url = BASE + ('&' if '?' in BASE else '?') + 'noshadow'
+        # a shader that fails to compile renders as an empty stage and only says so on the
+        # console, so never measure without watching it
+        errors = []
+        page.on('console', lambda m: errors.append('console.%s: %s' % (m.type, m.text))
+                if m.type == 'error' else None)
+        page.on('pageerror', lambda e: errors.append('pageerror: %s' % e))
 
-        page.goto(on_url, wait_until='load', timeout=45000)
-        page.wait_for_selector('canvas', timeout=45000)
-        page.wait_for_timeout(5000)
+        page.goto(BASE, wait_until='domcontentloaded', timeout=90000)
+        page.wait_for_selector('canvas', timeout=90000)
+        page.wait_for_timeout(6000)
         hidden = page.evaluate(HIDE_JS)
-        page.wait_for_timeout(200)
-        on, on_stack = shoot_all(page, 'ground-on')
         cam = page.evaluate('() => { const c = window.__flyCamera; '
-                            'return c ? [c.position.toArray().map(n=>+n.toFixed(3)), c.fov] : null; }')
+                            'return c ? [c.position.toArray().map(n => +n.toFixed(3)), c.fov] : null; }')
         gl = page.evaluate('() => window.__flyGl || null')
-        print('camera %s  overlays hidden %s' % (cam, hidden))
-        print('renderer %s' % (gl,))
+        print('camera %s   renderer %s   overlays hidden %s' % (cam, gl, hidden))
+        shipped = Shot(page, 'ground-on')
+        print('pool ablation: %s' % page.evaluate(POOL_OFF_JS, 0))
+        pool_off = Shot(page, 'ground-pool-off')
+        page.evaluate(POOL_OFF_JS, 1)
+        # how much of the slab does the key light actually supply? A shadow can only ever
+        # remove the key's share, so this is the ceiling on the cast shadow's contrast.
+        print('key ablation: %s' % page.evaluate(
+            "() => { let n = 0; window.__flyScene.traverse(o => {"
+            " if (o.isDirectionalLight && o.castShadow) { o.userData._i = o.intensity;"
+            " o.intensity = 0; n++; } }); return 'key intensity -> 0 (' + n + ' light)'; }"))
+        key_off = Shot(page, 'ground-key-off')
 
-        page.goto(off_url, wait_until='load', timeout=45000)
-        page.wait_for_selector('canvas', timeout=45000)
-        page.wait_for_timeout(5000)
+        off_url = BASE + ('&' if '?' in BASE else '?') + 'noshadow'
+        page.goto(off_url, wait_until='domcontentloaded', timeout=90000)
+        page.wait_for_selector('canvas', timeout=90000)
+        page.wait_for_timeout(6000)
         page.evaluate(HIDE_JS)
-        page.wait_for_timeout(200)
-        off, off_stack = shoot_all(page, 'ground-off')
+        rig_off = Shot(page, 'ground-off')
         browser.close()
 
-    # hero shot of the shipped state, annotated with the camera state
-    hero = annotate(open(ART + '/viz-fly-ground-on.png', 'rb').read(),
-                    'shadows ON  camera frozen  %s' % (cam,))
+    print()
+    print('== console errors during the run: %d ==' % len(errors))
+    for e in errors[:12]:
+        print('   ' + e[:300])
+    print()
+
+    # the hero is the shipped frame, untouched: no annotation on the deliverable. The labelled
+    # copy is a diagnostic, for anyone cross-checking what the numbers were read from.
     with open(ART + '/viz-fly-hero.png', 'wb') as fh:
-        fh.write(hero)
+        fh.write(open(ART + '/viz-fly-ground-on.png', 'rb').read())
+    with open(ART + '/viz-fly-ground-on-labelled.png', 'wb') as fh:
+        fh.write(annotate(open(ART + '/viz-fly-ground-on.png', 'rb').read(),
+                          'shadows ON  camera frozen  %s' % (cam,)))
 
-    # noise floor: two frames of the SAME state
-    noise = float(np.abs(on_stack[0] - on_stack[-1]).mean())
-    still = float(np.abs(on_stack[0] - on_stack[-1])[100:400].mean())
-    print('temporal noise (same state, %.1fs apart): whole frame %.2f luma, '
-          'upper third %.2f luma' % ((SHOTS - 1) * 0.7, noise, still))
+    on = shipped.mean
+    upper = np.maximum(on, rig_off.mean)
+    # slab pixels: neither frame paints them as fly body, and they are not the void
+    ground = (upper < FLY_LUMA) & (upper > 3)
+    bright = dilate(on > FLY_LUMA, 10) | dilate(rig_off.mean > FLY_LUMA, 10)
 
-    # ground pixels: neither frame paints them bright, and neither is the background
-    upper = np.maximum(on, off)
-    ground = (upper < FLY_LUMA) & (upper > 4)
-    bright = dilate(on > FLY_LUMA, 10) | dilate(off > FLY_LUMA, 10)
-
-    delta = off - on
-    shadow = (delta > SHADOW_DELTA) & ground & ~bright
-    # a footprint has to be a blob, not speckle: keep only richly shadowed pixels and
-    # require local support
-    core = (delta > 10) & ground & ~bright
-    shadow = dilate(core, 3) & ground & ~bright
-
-    ring = (dilate(shadow, 26) & ~dilate(shadow, 4) & ground & ~bright)
-
-    def m(mask):
-        return float(on[mask].mean()) if mask.any() else float('nan')
-
-    under, beside = m(shadow), m(ring)
-    contrast = (beside - under) / beside * 100.0 if beside else 0.0
-
-    print()
     print('== frame stats (mean of %d frames per state) ==' % SHOTS)
-    for name, l in (('on', on), ('off', off)):
-        print('  %-4s mean %.2f  p50 %d  p99 %d  max %d  frac>%d %.4f'
+    for name, s in (('shipped ', shipped), ('pool off', pool_off), ('rig off ', rig_off),
+                    ('key off ', key_off)):
+        l = s.mean
+        print('   %s mean %6.2f  p50 %3d  p99 %3d  max %3d  frac>%d %.4f  noise %.2f'
               % (name, l.mean(), np.percentile(l, 50), np.percentile(l, 99), l.max(),
-                 FLY_LUMA, (l > FLY_LUMA).mean()))
-
+                 FLY_LUMA, (l > FLY_LUMA).mean(), s.noise))
     print()
-    print('== shadow footprint, located from the A/B difference ==')
-    if shadow.sum() < 500:
-        print('  no footprint found (area %d px): the shadow rig is not darkening ground pixels'
-              % shadow.sum())
-    else:
-        ys, xs = np.where(shadow)
-        print('  area %6d px   x %4d..%4d   y %4d..%4d   centroid (%4d,%4d)'
-              % (shadow.sum(), xs.min(), xs.max(), ys.min(), ys.max(), xs.mean(), ys.mean()))
-        off_under = float(off[shadow].mean())
-        print('  darkening where it lands: %.2f luma (on) vs %.2f luma (off) -> %.1f%% darker'
-              % (under, off_under, (off_under - under) / off_under * 100.0))
-        print()
-        print('  shadow (under)  %6.2f' % under)
-        print('  lit ring beside %6.2f' % beside)
-        print('  LOCAL CONTRAST  %6.1f%% darker than the surface immediately beside it'
-              % contrast)
-        vs_noise = (float(off[shadow].mean()) - under) / max(noise, 1e-6)
-        print('  signal/noise     %6.1fx the temporal noise floor' % vs_noise)
 
+    pool_foot = contrast('contact pool (material term): shipped vs uPoolStrength=0',
+                         shipped, pool_off, ground, bright, on)
+    rig_foot = contrast('shadow rig: shipped vs ?noshadow', shipped, rig_off, ground, bright, on)
+
+    print('== what the key light actually supplies the slab ==')
+    for (y0, y1, x0, x1, nm) in [(560, 620, 200, 520, 'slab beside fly '),
+                                 (640, 760, 60, 300, 'slab left of it '),
+                                 (640, 760, 620, 1000, 'slab under fly  '),
+                                 (500, 560, 60, 300, 'slab mid left   ')]:
+        a = on[y0:y1, x0:x1]
+        b = key_off.mean[y0:y1, x0:x1]
+        m = a < FLY_LUMA
+        if m.sum() > 20:
+            v, w = float(a[m].mean()), float(b[m].mean())
+            print('   %s y%4d..%4d x%4d..%4d: shipped %6.2f  key at 0 %6.2f  -> key supplies %.1f%%'
+                  % (nm, y0, y1, x0, x1, v, w, (v - w) / max(v, 1e-6) * 100.0))
     print()
+
     print('== void ==')
-    # self-locating: the top of the lit content, then the band well above it
     rowmax = on.max(axis=1)
     top = int(np.argmax(rowmax > 40)) if (rowmax > 40).any() else 0
-    vo = on[60:max(120, top - 30)]
-    print('  top of lit content y=%d; void band y 60..%d: mean %.2f  p99 %d  max %d'
-          % (top, max(120, top - 30), vo.mean() if vo.size else float('nan'),
-             np.percentile(vo, 99) if vo.size else 0, vo.max() if vo.size else 0))
-    corner = on[40:200, 0:360]
-    print('  upper-left corner y40..200 x0..360: mean %.2f  max %d'
-          % (corner.mean(), corner.max()))
-    print('  background clear colour luma %.2f' % float(
-        (np.array(BG) * np.array([299, 587, 114])).sum() // 1000))
-
+    band = on[60:max(140, top - 30)]
+    print('   top of lit content y=%d; void band y 60..%d: mean %.2f  p99 %d  max %d'
+          % (top, max(140, top - 30), band.mean() if band.size else float('nan'),
+             np.percentile(band, 99) if band.size else 0, band.max() if band.size else 0))
+    for (y0, y1, x0, x1, nm) in [(40, 200, 0, 360, 'upper left '), (40, 200, 1080, 1440, 'upper right'),
+                                 (200, 300, 400, 1040, 'behind fly ')]:
+        b = on[y0:y1, x0:x1]
+        print('   %s y%4d..%4d x%4d..%4d: mean %.2f  max %d' % (nm, y0, y1, x0, x1, b.mean(), b.max()))
     print()
-    print('== vertical profile through the fly column (x 560..940), shadows ON ==')
+
+    print('== vertical profile through the fly column (x 560..940) ==')
     for y in range(240, 900, 30):
         v = float(on[y:y + 30, 560:940].mean())
-        s = float(shadow[y:y + 30, 560:940].mean())
-        print('  y=%4d %6.1f %-30s shadow %.0f%%' % (y, v, '#' * int(v / 4), 100 * s))
-
+        pf = float(pool_foot[y:y + 30, 560:940].mean()) if pool_foot is not None else 0
+        rf = float(rig_foot[y:y + 30, 560:940].mean()) if rig_foot is not None else 0
+        print('   y=%4d %6.1f %-28s pool %3.0f%%  rig %3.0f%%'
+              % (y, v, '#' * int(v / 4), 100 * pf, 100 * rf))
     print()
-    show(on, '== shadow map (S) over the lit frame, shadows ON ==', mark=shadow)
-    show(np.clip(off - on, 0, 60), '== |off - on| difference (the shadow signal) ==')
+
+    show(on, '== shipped frame ==', mark=pool_foot, mk='X')
+    show(np.clip(shipped.mean - rig_off.mean, 0, 60), '== removed by ?noshadow (the rig) ==')
     return 0
 
 

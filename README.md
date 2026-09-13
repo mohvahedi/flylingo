@@ -269,3 +269,67 @@ build → restart → verify.
 the harnesses does not appear in the app until that script runs, so run it, rebuild, and
 restart. The app was briefly showing the procedural fly and labelling it "PROCEDURAL
 SPECIMEN" for exactly this reason.
+
+## The hero scene: the fly, and the phone it plays on
+
+`viz-fly/src/fly/PhoneStage.tsx` is the hero panel. It places the handset on a lit stage with
+the real Duolingo lesson on its screen, and flies the specimen to the answer it picked.
+
+The screen is drawn by `duolingoScreen.ts`, not by the DOM. That is deliberate:
+
+- The fly has to fly TO the answer. That needs the pixel rectangle of every option card, so
+  the scene can map the card's position through the phone's world matrix. Rasterising live DOM
+  gives no such handle; drawing the screen means the geometry is known exactly.
+- It has to be a texture on a mesh in a 3D scene, lit and seen at an angle.
+- No rasteriser dependency and no font-inlining failure mode. The typeface is loaded with the
+  FontFace API and every element is drawn deterministically.
+
+The same numbers that draw a card decide where the fly goes, so the two cannot disagree. That
+is verified rather than assumed: `tools/check_card_target.py` reads back where each card lands
+in world space and asserts the fly's target sits on the card it chose.
+
+### What the asset needed, and why
+
+`smartphone_with_green_screen.glb` could not be used as shipped:
+
+1. **Its node chain already normalises it.** `Sketchfab_model` applies the Z-up to Y-up
+   rotation, then `.fbx` scales by 0.01, then `Cube` scales by 100 and rotates again. The net
+   result is an upright, portrait handset, but its glass faces world +X (measured normal
+   `[0.984, 0, 0.179]`), so a quarter turn brings it round to the viewer. An early version
+   applied its own "stand it up" rotation on top and turned the phone a second time.
+2. **Its body materials are pure black** (`baseColor 0,0,0`), which is invisible on a dark
+   stage: the first renders read as a white card floating in a void. They are lifted to a dark
+   grey in `phoneModel.ts`.
+3. **Its screen mesh cannot be textured.** `Cube_chroma_0` is 47 triangles whose UVs span only
+   0.62 x 0.74 of the unit square. A clean plane replaces it, sized to the measured rectangle
+   (`x 0.00554`, `0.06982 x 0.15482`, normal `+X`) and parented to the same node, so it inherits
+   the identical transform chain. Parenting it to the scene root was the first bug: the plane
+   then ignored the asset's scale and rotation and floated off the handset.
+
+### Two traps this scene cost time on
+
+- **Per-frame lerp ties motion to frame rate.** Under software rendering the fly took over 26
+  seconds to cross the scene and never arrived. The flight now interpolates against
+  `performance.now()`, so it takes the same 1.6 seconds on any machine.
+- **A draw effect keyed on an unstable array loops.** Callers naturally write
+  `options={list.map(o => ({text: o}))}`, whose identity changes every render; the effect
+  redrew, set state, and re-ran forever. It also reset the telemetry interval, which is why the
+  probe kept coming back empty. It is keyed on a serialised value now.
+
+The fly's per-tarsus contact patches are floor decals and are switched off here: up at the
+screen they painted dark smudges across the white card.
+
+## Licences
+
+Two third-party models are used. Both require attribution, and one is share-alike.
+
+| Asset | Author | Licence |
+|---|---|---|
+| `fly.glb` | victorberdugo1 | CC-BY-4.0 |
+| `smartphone_with_green_screen.glb` | peroroo | **CC-BY-SA-4.0** |
+
+**CC-BY-SA-4.0 is share-alike.** Adaptations of that handset must be released under the same
+licence. If this project is ever distributed or licensed, that obligation travels with it, and
+it is worth deciding deliberately rather than discovering later. Attribution for both models is
+rendered in the HUD footer, because a licence that requires credit requires it where the work
+is shown, not only in a repository.

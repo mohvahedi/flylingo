@@ -181,7 +181,11 @@ void main() {
   // Same viewport-scaled pixel sizing as the static cloud, so the live overlay sits
   // on the same visual scale and never collapses below a visible pixel.
   float px = uSize * uPixelRatio * (uViewHeight / 600.0) * sizeScale * clamp(2.4 / depth, 0.75, 1.35);
-  gl_PointSize = clamp(px, 1.5, 40.0);
+  // A spike pin is rasterised at a size floor. The accent ring lives at radius
+  // 0.35-0.47 of the sprite, so a shrunken sprite put the ring inside a couple
+  // of pixels and it was lost in the fragment coverage test.
+  float minPx = aShock > 0.02 ? 16.0 : 1.5;
+  gl_PointSize = clamp(px, minPx, 40.0);
 }
 `;
 
@@ -203,7 +207,7 @@ void main() {
   float mask = smoothstep(0.25, 0.01, r2);
   float core = smoothstep(0.055, 0.0, r2);
   vec3 base = vSign >= 0.0 ? uPos : uNeg;
-  float shock = clamp(vShock, 0.0, 1.0);
+  float shock = clamp(vShock, 0.0, 1.0) * uGate;
   vec3 col = 1.0 - exp(-max(base, 0.0) * uToneGain);
   col += core * (0.22 + 0.45 * vAct);
   col *= mix(1.0, 0.7, vFog);
@@ -213,7 +217,6 @@ void main() {
   // glowing over an all-zero state.
   float energy = (0.15 + 1.1 * vAct + vShock) * uGate;
   float alpha = mask * clamp(energy, 0.0, 1.0);
-  if (alpha < 0.02) discard;
   // A fresh spike gets a ring at the edge of its (large) sprite. A spike pin
   // lands on the brightest node in the frame, and additive amber on top of a
   // bright cyan node blends straight to white, which is why the amber read as
@@ -221,10 +224,28 @@ void main() {
   // underneath is dim, so the amber survives; the centre is pulled back so the
   // ring is what the eye catches. The amber is composited after the tone curve
   // so the one colour that must stay legible is not greyed out by it.
+  //
+  // The ring is computed BEFORE the coverage test and carries its own alpha
+  // floor. It used to be drawn after the alpha < 0.02 discard, and its peak
+  // band sat at r2 = 0.225 where the mask has already fallen to 0.03, so the
+  // strongest part of the ring was culled and only a washed-out inner sliver
+  // survived. Measured in the panel: spikes reported 3-5 per frame with warm_px
+  // 0 and r - b up to 64 but no pixel passing r > g + 6.
+  float ring = 0.0;
   if (shock > 0.02) {
-    float ring = smoothstep(0.12, 0.225, r2) * (1.0 - smoothstep(0.225, 0.25, r2));
-    col = mix(col, uShockColor, ring * 0.92);
-    alpha = max(alpha * (1.0 - 0.6 * ring), ring * shock * uGate);
+    ring = smoothstep(0.085, 0.155, r2) * (1.0 - smoothstep(0.215, 0.248, r2));
+    alpha = max(alpha, ring * shock);
+  }
+  if (alpha < 0.02) discard;
+  if (ring > 0.0) {
+    // The accent must not be able to lose the red/green race. Two changes: the
+    // pin's own cyan is pushed down under the ring, then a low-green amber is
+    // mixed in at full strength. Cyan (r low, g high) added to amber pulls
+    // green level with red once the local cyan accumulation exceeds roughly the
+    // amber alpha, and past that point no pixel passes r > g + 6, so the accent
+    // is invisible in the capture even though it is drawing.
+    col *= 1.0 - 0.85 * ring;
+    col = mix(col, uShockColor, ring);
   }
   gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
 }
