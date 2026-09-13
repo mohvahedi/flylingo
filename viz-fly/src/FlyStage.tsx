@@ -400,12 +400,15 @@ function Stage({
         geometry={slab}
         material={ground}
       />
+      {/* the scale rings, scaled with the slab: at their old 1.55 and 2.6 radii they would have
+          reached past a 2.30 x 2.10 slab and drawn a circle out over the void. The outer one now
+          stops at 0.72 of the half extent, which keeps it clear of the rim band as well. */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]} name="ring-inner">
-        <ringGeometry args={[1.55, 1.575, 96]} />
+        <ringGeometry args={[0.96, 0.975, 96]} />
         <meshBasicMaterial color="#22d3ee" transparent opacity={0.14} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.006, 0]} name="ring-outer">
-        <ringGeometry args={[2.6, 2.615, 96]} />
+        <ringGeometry args={[1.52, 1.532, 96]} />
         <meshBasicMaterial color="#38bdf8" transparent opacity={0.05} />
       </mesh>
 

@@ -482,17 +482,45 @@ uniform vec4 uPool;
 uniform float uPoolStrength;
 /** how much of its albedo the pool removes at its centre, at full strength */
 uniform float uPoolDepth;
+/** how much the slab's rim band brightens, so the silhouette is an edge and not a fade */
+uniform float uRim;
 `;
 
 const GROUND_BODY = /* glsl */ `
 {
 	vec2 p = abs( vObjPos.xy ) / uSlabHalf;
 	float e = max( p.x, p.y );
-	float shaped = mix( 1.0, 0.72, smoothstep( 0.0, 1.0, e ) );
-	shaped *= 1.0 - 0.34 * smoothstep( 0.90, 1.0, e );
+	// the top face, turning gently away from the key
+	float shaped = mix( 1.0, 0.78, smoothstep( 0.0, 1.0, e ) );
+	// THE RIM. This is the fix, and the previous two attempts are why it is written this way.
+	//
+	// The old floor multiplied its albedo by a quadratic fade that reached zero at r=3.4 while the
+	// geometry ran to r=7, so the surface was already black well before its own edge: the boundary
+	// was the tail of a gradient, not an edge, and a viewer reading the render said the stage
+	// "fades into black rather than ending at a clear edge". Darkening the rim further (the crease
+	// that was here) made it worse.
+	//
+	// So the last band BRIGHTENS instead. The gradient bottoms out around 0.78 two thirds of the
+	// way out and the rim then climbs back to about 1.25x the centre value, which reads as the
+	// slab's chamfered edge catching the key. Nothing can brighten beyond e=1 because there is no
+	// geometry there, so the step from the lit rim to the black void is as hard as the silhouette
+	// allows - which is the whole point, and it is what a bounded slab has and a faded disc
+	// cannot have.
+	float rim = smoothstep( 0.80, 0.995, e );
+	shaped *= 1.0 + uRim * rim;
+	// the contact pool under the body
 	vec2 q = ( vObjPos.xy - uPool.xy ) / uPool.zw;
 	float pool = 1.0 - smoothstep( 0.25, 1.0, length( q ) );
 	shaped *= 1.0 - uPoolStrength * uPoolDepth * pool;
+	// the skirt, the slab's vertical face. Held at full albedo because its normal meets the key far
+	// more squarely than the top face does (0.87 against 0.37 of the key's irradiance on the near
+	// and right walls), so wherever any of it is in frame it is the brightest thing on the slab.
+	// Ray casting says no wall is visible from the hero camera at any thickness - the far wall is
+	// hidden under the top face and the others are below the frame or facing away - so this is not
+	// what carries the edge here. It stays because a wall as dark as the void behind it would have
+	// no silhouette the moment the framing changed.
+	float wall = smoothstep( 0.0, -0.02, vObjPos.z );
+	shaped = mix( shaped, 1.0, wall );
 	diffuseColor.rgb *= shaped;
 	roughnessFactor = clamp(
 		roughnessFactor + 0.14 * flHash13( vObjPos * 26.0 ),
@@ -531,7 +559,7 @@ export function groundMaterial(hx: number, hz: number): THREE.MeshPhysicalMateri
     // gradient. Measured: at '#141c25' the whole shadow rig darkened the floor by only
     // 11.6%, which reads as no shadow at all. Raised so the shadow has something to
     // subtract from. Still far below any value that would put a visible horizon in frame.
-    color: new THREE.Color('#3a4657'),
+    color: new THREE.Color('#44505f'),
     roughness: 0.58,
     metalness: 0.0,
     clearcoat: 0.22,
@@ -551,6 +579,9 @@ export function groundMaterial(hx: number, hz: number): THREE.MeshPhysicalMateri
       // measure the pool's own local contrast, the same way ?noshadow ablates the shadow rig.
       uPoolStrength: { value: 1 },
       uPoolDepth: { value: 0.60 },
+      // 0.6 puts the rim at ~1.25x the slab's centre value: bright enough that the boundary reads
+      // as an edge against the black void, not so bright that the slab looks like it is glowing
+      uRim: { value: 0.6 },
       uPatA: { value: hx },
       uPatB: { value: 1 },
       uGroove: { value: 0 },

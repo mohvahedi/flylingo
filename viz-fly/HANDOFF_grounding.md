@@ -1,8 +1,12 @@
 # Handoff: grounding the fly specimen
 
-**Status: UNSOLVED. The fly still reads as floating, not standing on a lit stage.**
-Written 2026-09-13 so the machine could be shut down. The agent that was working on this was
-stopped deliberately; it had not landed any source change.
+**Status: PARTLY SOLVED — the fly reads as grounded; the bounded edge is now measurable but was**
+**not visible until the rim fix below.** See "Round 2" at the end of this file for what changed
+after this header was written. The original header, kept because the diagnosis below still stands:
+
+> Status as of the first pass: UNSOLVED. The fly still reads as floating, not standing on a lit stage.
+> Written 2026-09-13 so the machine could be shut down. The agent that was working on this was
+> stopped deliberately; it had not landed any source change.
 
 ## The problem
 
@@ -97,3 +101,62 @@ disagreed before, so check both.
 - Never use `readPixels` for evidence: it returns zeros without `preserveDrawingBuffer`. Use
   element or full-page screenshots analysed as PNG bytes, which is what all tools here do.
 - Do not rebuild while `next start` is running — see README.md.
+
+## Round 2 — what actually fixed it (2026-09-13)
+
+The ground is now a bounded extruded slab (`src/fly/slab.ts`) with a lit rim band, and the fly
+reads as grounded: an independent reviewer looking at the live render said the shadow "along with
+the leg placement, makes the fly read as grounded rather than floating" — the first time that has
+been true. The two real causes were not the ones the earlier pass chased. **First**, drei's
+`ContactShadows` was not casting a contact shadow at all: measured with the fly hidden so nothing
+could cast, the floor under it read 12.2 luma against 44.8 with `?noshadow`, and switching the key
+light's shadow map off changed nothing (12.20 -> 12.19). It was painting its whole 3.4 x 3.4 plane
+near black, and that uniform black quad *was* the "void" the fly floated over. It was deleted; the
+cast shadow is now three's own `ShadowMaterial` overlay (`ground-shadow` in `FlyStage.tsx`), whose
+alpha is `opacity * (1 - getShadowMask())`, so the depth of the shadow is art directed instead of
+being diluted by the fill, the bounce and the environment. **Second**, the old `fade * fade` = 0 at
+r=3.4 on geometry that ran to r=7 meant the surface was already black well before its own edge, so
+the boundary was the tail of a gradient rather than an edge.
+
+**The bounded edge: fixed, and here is the honest measurement.** A reviewer had said the stage
+"fades into black rather than ending at a clear edge", and that was correct. The rim now brightens
+instead of darkening — a band from 0.80 to 1.0 of the half extents that climbs back to ~1.25x the
+slab's centre value, so the boundary is a lit edge against a 0-luma void. `tools/slab_edge.py`
+reads the first lit pixel down each column: the slab/void step is now **median 86.7 luma, min 48.7,
+max 171** across fly-free columns, where the old faded rim sat at ~9 luma just inside the edge.
+Measured with `tools/ground_measure.py` (three instrument bugs fixed, see below):
+
+| Measure | Before | Now |
+|---|---|---|
+| local contrast, pool under body vs slab beside it | 17.0% (wrong box — see below) | **55.0% darker** |
+| shadow rig, under-body on/off | 57.5% | 12.2% darker (28.76 / 32.76) |
+| void, both upper corners | `nan` | **0.00 / 0.00** |
+| slab lit value beside the fly | 24.54 | 63.91 |
+
+`tools/ground_local.py` locates the darkening from the data instead of a box pair and ablates the
+pool live through `uPoolStrength`: pool **21.3% local contrast**, shadow rig **43.1%** (52.5% darker
+where it lands), both 1.7x and 3.2x the temporal noise floor. Zero console errors in every run.
+
+**One thing I could not do, so it is not claimed.** The framing advice to "bring the near edge into
+frame" is not achievable at this camera, and the skirt is not the lever either. Ray casting the
+frame against the slab's box shows the frame's bottom edge crosses the floor at world
+`z = 1.087 - 0.786x`, so the floor is only visible from ~2.1 units in front of the camera outward —
+a near edge can only be shown by pulling `hz` below ~1.1, inside the fly's own footprint (feet reach
+z=+0.9, pool reaches z=+1.5). And **no wall of the box is visible at any thickness**: the far wall
+is hidden under the top face, the left wall faces away from a camera at x=+1.85, and the right and
+near walls are below the frame. Thickness was ray cast at 0.16, 0.20 and 0.34 with no change. The
+skirt is still held at full albedo for any other framing, but from the hero camera the edge can only
+be carried by the top face's silhouette, which is why the rim band is the fix. Slab half extents are
+now 2.30 x 2.10 (was 3.35 x 2.95) so the left edge lands at screen x~98 with black beyond it rather
+than at x=-76 with one pixel of margin, and the scale rings were scaled to 0.96 / 1.52 to match.
+
+**Three instrument bugs fixed, because each had produced a confident wrong number.** In
+`ground_measure.py`: the `BOX` table was documented `(x0,x1,y0,y1)` and unpacked `(y0,y1,x0,x1)`, so
+the "under" and "slab" boxes both sampled the near floor *beside* the legs — **the 17.0% local
+contrast in the table above was that measurement, not a shadow**; `HIDE_JS` hid the canvas's
+siblings, which is the canvas itself, so the HUD stayed in every shot; and the void boxes fell
+outside the frame, which is why that row read `nan`. In `ground_local.py`: the A/B footprint had the
+wrong sign, and the fly's own bright pixels were allowed into the footprint, which is why an early
+ablation appeared to show *turning shadows off* making the scene brighter. The fly silhouette is now
+derived by differencing a fly-hidden frame and excluded from every footprint.
+
