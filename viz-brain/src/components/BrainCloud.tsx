@@ -733,7 +733,7 @@ function Cloud({
     // 0.012 is a 4.6x cut on the ambient term only, which leaves the live frame
     // untouched and its own measured bright.
     const liveFrame = refValue.current > 0;
-    staticMat.uniforms.uQuiet.value = liveFrame ? 1 : 0.055; // AB-TEMP
+    staticMat.uniforms.uQuiet.value = liveFrame ? 1 : 0.012;
     staticMat.uniforms.uClassMix.value = 1;
     staticMat.uniforms.uToneGain.value = 1.15;
     staticMat.uniforms.uFogNear.value = 1.5;

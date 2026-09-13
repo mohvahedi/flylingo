@@ -210,6 +210,13 @@ def main():
         page.wait_for_timeout(6000)
         page.evaluate(HIDE_JS)
         rig_off = Shot(page, 'ground-off')
+        # The fly's own pixels are not floor: ?noshadow changes the fly's self shadowing and its
+        # contact patches too, so any A/B footprint that is allowed to include the body will
+        # report a confident contrast between the fly and the slab. Derive the fly's real
+        # silhouette here, with the shadow rig already off, so the only variable is the fly.
+        page.evaluate("() => { window.__flyScene.getObjectByName('fly-fit').visible = false; }")
+        page.wait_for_timeout(700)
+        nofly = Shot(page, 'ground-nofly')
         browser.close()
 
     print()
@@ -228,9 +235,13 @@ def main():
 
     on = shipped.mean
     upper = np.maximum(on, rig_off.mean)
-    # slab pixels: neither frame paints them as fly body, and they are not the void
-    ground = (upper < FLY_LUMA) & (upper > 3)
+    # the fly's silhouette, from the shadow-rig-off pair where the only difference is the fly
+    fly = dilate(np.abs(rig_off.mean - nofly.mean) > 6, 8)
+    # slab pixels: not the fly, not the void, and not painted bright by either frame
+    ground = ~fly & (upper < FLY_LUMA) & (upper > 3)
     bright = dilate(on > FLY_LUMA, 10) | dilate(rig_off.mean > FLY_LUMA, 10)
+    print('   fly silhouette %d px (%.1f%% of the frame) excluded from every footprint'
+          % (fly.sum(), 100.0 * fly.mean()))
 
     print('== frame stats (mean of %d frames per state) ==' % SHOTS)
     for name, s in (('shipped ', shipped), ('pool off', pool_off), ('rig off ', rig_off),
