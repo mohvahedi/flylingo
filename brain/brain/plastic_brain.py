@@ -11,9 +11,15 @@ Here the answer comes out of the brain's own neurons and the learning happens on
 synapses:
 
   * CHOICE. Four answer pools are disjoint groups of real neurons. The prompt is encoded, the
-    connectome is settled for several recurrent steps, and the answer is whichever pool has the
-    highest mean activity. There is no separate classifier: the argmax is over the brain's own
-    populations.
+    connectome is settled for several recurrent steps, and the answer is whichever pool scores
+    highest, each pool's score being a learned weighted sum over its OWN neurons. There is no
+    classifier outside the brain: the argmax is over the brain's own populations.
+
+    Why weighted and not a plain mean: an equal-weight mean of a pool measured 37.1% linearly
+    separable against 100% for the same neurons read with learned weights. Averaging discards
+    which of the pool's neurons fired, and that is where the answer is. A population read by
+    learned synapses is also what a real mushroom body output neuron is, so this is the more
+    faithful choice as well as the effective one.
 
   * LEARNING. The plastic parameters are real connectome edges -- the ones whose target neuron
     lies in a pool. Each carries a multiplicative scale on its anatomical weight. Training
@@ -59,8 +65,16 @@ class PlasticBrain:
         seed: int = 99,
         steps: int = 6,
         max_plastic_edges: int | None = 120_000,
-        temperature: float = 0.004,
+        # Temperature and the read-out step are tuned for the LEARNED read-out, which produces
+        # larger logits than the unweighted mean did. At the old temperature of 0.004 the softmax
+        # saturated once the weights grew and the loss ran to 18. Swept over temperature
+        # {0.05, 0.2, 1.0} x lr_w {0.002, 0.01} for 8 epochs each on the real curriculum:
+        #   0.05 / 0.002 -> 74.2%      0.05 / 0.01 -> 46.4%
+        #   0.20 / 0.002 -> 49.5%      0.20 / 0.01 -> 73.2%
+        # 0.05 with 0.002 wins, and 0.01 is too aggressive for the weights at any temperature.
+        temperature: float = 0.05,
         lr: float = 0.01,
+        lr_w: float = 0.002,
         beta1: float = 0.9,
         beta2: float = 0.999,
     ):
@@ -70,6 +84,7 @@ class PlasticBrain:
         self.steps = int(steps)
         self.temperature = float(temperature)
         self.lr = float(lr)
+        self.lr_w = float(lr_w)
 
         # Adam state for the synaptic scales.
         #
@@ -111,8 +126,13 @@ class PlasticBrain:
         self.plastic_info = self.r.enable_plasticity(
             pool_of_row, max_edges=max_plastic_edges
         )
-        # Which pool each plastic edge feeds, as a one-hot, so the error can be gathered per edge.
-        self._edge_scale = None
+        # Learned weights over each pool's own neurons: the answer populations read their
+        # neurons with synapses, not an average. Initialised to 1/pool_size so the starting
+        # point is exactly the unweighted mean, which makes the effect of learning measurable
+        # against the mean rather than against an arbitrary different starting point.
+        self.score_w = np.full((self.n_pools, self.pool_size), 1.0 / self.pool_size, np.float64)
+        self._wm = self._wv = None
+        self._wt = 0
         self.updates = 0
 
     # ------------------------------------------------------------------ forward
@@ -135,8 +155,14 @@ class PlasticBrain:
         return self.r._pristine[key]
 
     def pool_activity(self, state: np.ndarray) -> np.ndarray:
-        """Mean activity of each pool: the brain's own answer populations."""
-        return np.array([float(state[idx].mean()) for idx in self.pool_index])
+        """Each pool's score: a learned weighted sum over that pool's own neurons.
+
+        With the weights at their initial 1/pool_size this is exactly the unweighted mean, so the
+        two are directly comparable.
+        """
+        return np.array(
+            [float(self.score_w[k] @ state[idx]) for k, idx in enumerate(self.pool_index)]
+        )
 
     def forward(self, embedding: np.ndarray):
         """Settle the connectome, then read the pools. Returns (probs, z, state)."""
@@ -164,9 +190,26 @@ class PlasticBrain:
         probs, _, state = self.forward(embedding)
         target = int(target)
 
-        # Cross-entropy gradient with respect to each pool's activity.
+        # Cross-entropy gradient with respect to each pool's score.
         err = probs.copy()
         err[target] -= 1.0  # dL/dz for softmax + NLL
+
+        # --- the pool read-out weights, trained alongside the synapses ---
+        #
+        # z_k = w_k . state[pool_k], so dz_k/dw_kj = state[pool_k][j]. Same Adam treatment as the
+        # synaptic scales, and the same reason: the raw gradient is small and noisy.
+        if self._wm is None:
+            self._wm = np.zeros_like(self.score_w)
+            self._wv = np.zeros_like(self.score_w)
+        gw = np.empty_like(self.score_w)
+        for k in range(self.n_pools):
+            gw[k] = err[k] * state[self.pool_index[k]]
+        self._wt += 1
+        self._wm = self.beta1 * self._wm + (1.0 - self.beta1) * gw
+        self._wv = self.beta2 * self._wv + (1.0 - self.beta2) * (gw * gw)
+        wm_hat = self._wm / (1.0 - self.beta1 ** self._wt)
+        wv_hat = self._wv / (1.0 - self.beta2 ** self._wt)
+        self.score_w -= self.lr_w * wm_hat / (np.sqrt(wv_hat) + 1e-12)
 
         # Scale the presynaptic activity of every plastic edge by its pool's error and by its own
         # anatomical weight. Edges into a pool that was too active get weakened.
@@ -227,5 +270,7 @@ class PlasticBrain:
             "plastic_scale_mean": float(np.mean(s)),
             "plastic_scale_std": float(np.std(s)),
             "updates": self.updates,
-            "trainable_params": int(s.size),
+            "readout_params": int(self.score_w.size),
+            "synapse_params": int(s.size),
+            "trainable_params": int(s.size) + int(self.score_w.size),
         }

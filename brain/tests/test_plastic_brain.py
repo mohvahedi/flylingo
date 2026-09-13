@@ -145,6 +145,33 @@ def test_the_choice_comes_from_the_pools(brain):
     assert abs(probs.sum() - 1.0) < 1e-9
 
 
+def test_the_readout_starts_as_the_unweighted_mean(brain):
+    """The learned weights must begin at 1/pool_size, so the starting point is the plain mean and
+    the effect of learning is measured against it rather than against an arbitrary start."""
+    import numpy as np
+
+    assert np.allclose(brain.score_w, 1.0 / brain.pool_size)
+    emb = encode_text("How do you say 'Hello' in Spanish?")
+    _, z, state = brain.forward(emb)
+    means = np.array([float(state[ix].mean()) for ix in brain.pool_index])
+    assert np.allclose(z, means), "initial readout is not the mean"
+
+
+def test_the_readout_weights_are_trained(brain):
+    """The pool weights are part of what learns, not fixed structure.
+
+    Measured reason they exist: an equal-weight mean of a pool is 37.1% linearly separable while
+    the same neurons read with learned weights are 100%. Averaging discards which of the pool's
+    neurons fired, and that is where the answer is.
+    """
+    import numpy as np
+
+    before = brain.score_w.copy()
+    for _ in range(5):
+        brain.observe(encode_text("How do you say 'Thank you' in Spanish?"), 0)
+    assert not np.allclose(before, brain.score_w), "the readout weights never moved"
+
+
 def test_pools_are_disjoint_real_neurons(brain):
     seen = np.concatenate(brain.pool_index)
     assert seen.size == brain.n_pools * brain.pool_size
@@ -153,6 +180,14 @@ def test_pools_are_disjoint_real_neurons(brain):
 
 
 # ------------------------------------------------------------------ learning
+
+def test_trainable_parameters_count_both_parts(brain):
+    """Reporting only the synapses would understate what learns, and only the readout would hide
+    the synaptic plasticity entirely."""
+    st = brain.stats()
+    assert st["trainable_params"] == st["synapse_params"] + st["readout_params"]
+    assert st["readout_params"] == brain.n_pools * brain.pool_size
+
 
 def test_a_gradient_step_moves_the_scales(brain):
     X = np.random.default_rng(7).standard_normal((4, 256)).astype(np.float32)
