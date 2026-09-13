@@ -48,11 +48,15 @@ const SPIKE_FLASH_SECONDS = 0.16;
  * in bursts, so a capture could still land on a frame whose flash had already
  * decayed (measured warm_px 0 with spikeCount 0 in 3 of 10 consecutive panel
  * captures, and 0 in every capture of the earlier run). Holding at full for a
- * fixed frame count makes the accent survive regardless of frame rate; the cost
- * is a longer tail on a slow renderer (12 frames is 0.2 s at 60 fps, ~1.2 s at
- * 10 fps), which is the price of the accent being legible at all.
+ * hold makes the accent survive a slow capture. The hold is in SECONDS, not frames.
+ *
+ * It used to be a frame count, which was the real defect: 12 frames is 0.42 s at 28 fps but
+ * only 0.06 s at 200 fps, so on fast hardware the accent would flash for a few dozen
+ * milliseconds and be effectively invisible. A frame count inverts with frame rate, which is
+ * exactly backwards for something whose job is to stay visible. 0.42 s reproduces the behaviour
+ * that measured well under the software rasteriser while remaining identical at any frame rate.
  */
-const SPIKE_HOLD_FRAMES = 12;
+const SPIKE_HOLD_SECONDS = 0.42;
 
 // ---------------------------------------------------------------------------
 // Caption figures. Every number here is measured and is quoted from
@@ -193,7 +197,8 @@ function Cloud({
   const controlsRef = useRef<OrbitControls | null>(null);
   const lastFrameTime = useRef(0);
   const shockState = useRef(new Float32Array(LIVE_SLOTS));
-  const shockHold = useRef(new Float32Array(LIVE_SLOTS));
+  /** absolute deadlines in ms, from performance.now(); 0 means no hold */
+  const shockHoldUntil = useRef(new Float32Array(LIVE_SLOTS));
   const lastSpikeKey = useRef('');
   void lastSpikeKey;
   const refScratch = useRef(new Float32Array(LIVE_SLOTS));
@@ -654,7 +659,7 @@ function Cloud({
         const s = spiked[k];
         if (s >= 0 && s < LIVE_SLOTS) {
           shockState.current[s] = 1;
-          shockHold.current[s] = SPIKE_HOLD_FRAMES;
+          shockHoldUntil.current[s] = frameNow + SPIKE_HOLD_SECONDS * 1000;
         }
       }
       for (let s = 0; s < LIVE_SLOTS; s += 1) {
@@ -665,11 +670,10 @@ function Cloud({
         // Real-time decay, so the amber flash lasts the same wall-clock
         // time at 30 fps and at 300 fps.
         if (shockState.current[s] > 0) {
-          if (shockHold.current[s] > 0) {
-            // Pinned at full strength for a fixed number of rendered frames, so
-            // a slow rasteriser cannot decay the one accent colour away between
-            // captures. Wall-clock decay still applies once the hold expires.
-            shockHold.current[s] -= 1;
+          if (shockHoldUntil.current[s] > frameNow) {
+            // Pinned at full strength until a wall-clock deadline, so the one
+            // accent colour cannot decay away between captures at any frame rate.
+            // Wall-clock decay applies once the hold expires.
           } else {
             shockState.current[s] *= Math.exp(-dtSec / SPIKE_FLASH_SECONDS);
           }
