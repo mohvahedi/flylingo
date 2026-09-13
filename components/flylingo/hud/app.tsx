@@ -9,10 +9,18 @@ import { api, useBrainStream, useServiceHealth } from "@/lib/flylingo/api";
 import type { AnswerResult, ApiChallenge, Mode, SessionStart } from "@/lib/flylingo/types";
 
 import { HudLesson } from "./lesson";
-import { Chip, HUD, HudStage, Label, Panel, Spark, Stat } from "./primitives";
+import { Chip, FitBox, HUD, HudStage, Label, LegendDot, Panel, Spark, Stat } from "./primitives";
 
 /** Both visualizations are WebGL and client-only; neither has a server renderer. */
-const FlyStage = dynamic(() => import("@/components/viz/fly/FlyStage"), {
+/**
+ * The hero: the specimen flying to the answer it picked, on the phone the lesson runs on.
+ *
+ * This replaces the bare specimen view. The Duolingo lesson on the phone is drawn by the same
+ * numbers the fly is targeted with, so the fly cannot be sent to a card other than the one it
+ * chose. The dark lesson panel on the right stays as the instrumentation view, where the
+ * fly's softmax and your own answer live.
+ */
+const PhoneStage = dynamic(() => import("@/components/viz/fly/fly/PhoneStage"), {
   ssr: false,
   loading: () => <ViewLoading label="specimen" />,
 });
@@ -54,6 +62,9 @@ export function HudApp() {
   const [hearts, setHearts] = useState(5);
   const [answered, setAnswered] = useState(0);
   const [total, setTotal] = useState(0);
+  /** Per-question outcomes, so the panel can show a track and a scoreboard. Kept for the
+      fly and the user separately, because the whole point of the demo is that they differ. */
+  const [history, setHistory] = useState<{ user: boolean; fly: boolean }[]>([]);
   const [bootError, setBootError] = useState<string | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
   const [rmsHistory, setRmsHistory] = useState<number[]>([]);
@@ -78,6 +89,7 @@ export function HudApp() {
       setStatus("none");
       setResult(null);
       setAnswered(0);
+      setHistory([]);
       try {
         const cur = await api.curriculum();
         const lesson = cur.units.flatMap((u) => u.lessons).find((l) => l.id === s.lesson_id);
@@ -117,6 +129,7 @@ export function HudApp() {
       setStatus(res.correct ? "correct" : "wrong");
       setHearts(res.hearts);
       setAnswered((n) => n + 1);
+      setHistory((h) => [...h, { user: res.correct, fly: res.fly_correct }]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "brain service did not respond");
     } finally {
@@ -148,6 +161,13 @@ export function HudApp() {
   }, []);
 
   const progress = total > 0 ? Math.min(1, answered / total) : (frame?.lesson_progress ?? 0);
+  /** The fly's pick: the server's recorded choice once answered, otherwise live off the stream. */
+  const flyProbs = result?.probs ?? frame?.probs ?? [];
+  const flyChoice =
+    result?.fly_choice ??
+    (flyProbs.length > 0
+      ? flyProbs.reduce((best, p, i) => (p > flyProbs[best] ? i : best), 0)
+      : -1);
   const flyAcc = frame?.fly_accuracy ?? 0;
   const userAcc = frame?.accuracy ?? 0;
   const mode = frame?.mode ?? "intact";
@@ -212,31 +232,36 @@ export function HudApp() {
           <div style={{ display: "flex", flexDirection: "column", gap: 18, minHeight: 0 }}>
             <Panel
               grow
-              label="drosophila melanogaster · male cns"
+              label="specimen · lesson on screen"
               right={
                 <Label tone="faint">
-                  specimen: fly.glb · victorberdugo1 · CC-BY-4.0
+                  fly.glb · victorberdugo1 (CC-BY-4.0) · handset by peroroo (CC-BY-SA-4.0)
                 </Label>
               }
             >
-              <div style={{ height: "100%", borderRadius: 2, overflow: "hidden" }}>
-                <FlyStage
-                  activity={frame?.state ?? []}
-                  stateRms={frame?.state_rms ?? 0}
-                  activeFraction={frame?.active_fraction ?? 0}
-                  correct={status === "none" ? null : status === "correct"}
-                  reward={frame?.reward ?? 0}
-                  mode={mode}
-                  width={698}
-                  height={430}
-                  dev={false}
-                  sparkline={false}
-                />
-              </div>
+              <FitBox>
+                {({ width, height }) => (
+                  <PhoneStage
+                    prompt={challenge?.prompt ?? "Loading the lesson…"}
+                    options={(challenge?.options ?? []).map((text) => ({ text }))}
+                    flyChoice={flyChoice}
+                    userChoice={selected ?? -1}
+                    status={status}
+                    answerIndex={result?.answer_index ?? -1}
+                    hearts={hearts}
+                    progress={progress}
+                    activity={frame?.state ?? []}
+                    stateRms={frame?.state_rms ?? 0}
+                    activeFraction={frame?.active_fraction ?? 0}
+                    width={width}
+                    height={height}
+                  />
+                )}
+              </FitBox>
             </Panel>
 
             <Panel
-              height={300}
+              height={352}
               glow
               label="connectome · activity pulses"
               right={
@@ -245,16 +270,57 @@ export function HudApp() {
                 </Label>
               }
             >
-              <div style={{ height: "100%", borderRadius: 2, overflow: "hidden" }}>
-                <BrainCloud
-                  state={frame?.state ?? []}
-                  spikes={frame?.spikes ?? []}
-                  sampledIds={frame?.sampled_ids ?? []}
-                  activeFraction={frame?.active_fraction ?? 0}
-                  stateRms={frame?.state_rms ?? 0}
-                  width={698}
-                  height={246}
-                />
+              {/* The figures and the colour key are rendered by the HUD, outside the canvas,
+                  rather than by the canvas itself. The cloud draws its own caption for the
+                  standalone harness, but here the stage is scaled to fit 16:9 and that
+                  caption became a grey smear over the point cloud. Keeping it in DOM type
+                  next to the canvas means it stays legible at any scale and stops competing
+                  with the render. */}
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  height: "100%",
+                  gap: 10,
+                }}
+              >
+                <div style={{ flex: "1 1 auto", minHeight: 0 }}>
+                  <FitBox>
+                    {({ width, height }) => (
+                      <BrainCloud
+                        state={frame?.state ?? []}
+                        spikes={frame?.spikes ?? []}
+                        sampledIds={frame?.sampled_ids ?? []}
+                        activeFraction={frame?.active_fraction ?? 0}
+                        stateRms={frame?.state_rms ?? 0}
+                        width={width}
+                        height={height}
+                        caption="none"
+                      />
+                    )}
+                  </FitBox>
+                </div>
+                <div style={{ flex: "0 0 auto" }}>
+                  <Label tone="faint" size={10.5}>
+                    male cns v1.0 · measured connectome · brain and ventral nerve cord
+                  </Label>
+                  <div
+                    style={{
+                      marginTop: 5,
+                      fontSize: 15,
+                      color: HUD.text,
+                      fontVariantNumeric: "tabular-nums",
+                      letterSpacing: "0.005em",
+                    }}
+                  >
+                    166,700 neurons · 25,582,938 directed edges · 139,668 distinct soma positions
+                  </div>
+                  <div style={{ marginTop: 9, display: "flex", gap: 20, flexWrap: "wrap" }}>
+                    <LegendDot swatch={HUD.cyan}>measured soma</LegendDot>
+                    <LegendDot swatch="rgba(91,200,214,0.42)">centroid fill</LegendDot>
+                    <LegendDot swatch={HUD.amber}>fresh spike</LegendDot>
+                  </div>
+                </div>
               </div>
             </Panel>
           </div>
@@ -334,6 +400,9 @@ export function HudApp() {
                 onSelect={setSelected}
                 onCheck={() => void onCheck()}
                 flyProbs={result?.probs ?? frame?.probs ?? []}
+                answered={answered}
+                total={total}
+                history={history}
               />
             )}
           </Panel>
@@ -449,20 +518,25 @@ export function HudApp() {
             alignItems: "baseline",
             gap: 12,
             color: HUD.dim,
-            fontSize: 12.5,
+            fontSize: 11.5,
             letterSpacing: "0.01em",
-            lineHeight: 1.45,
+            lineHeight: 1.5,
           }}
         >
-          <Label tone="faint">attribution</Label>
-          <span>
-            Specimen model{" "}
-            <span style={{ color: HUD.cyanPale }}>fly.glb</span> by victorberdugo1,
-            licensed CC-BY-4.0. The connectome wiring never changes; a 516-parameter readout
-            learns the 97 phrases. Measured: the intact connectome, a shuffled graph, a
-            degree-matched random graph and the raw encoding with no reservoir all reach the
-            same accuracy, so the connectome contributes no measurable learning advantage on
-            this task.
+          <Label tone="faint" size={9.5}>
+            attribution
+          </Label>
+          <span style={{ flex: "1 1 auto", minWidth: 0 }}>
+            <span style={{ color: HUD.cyanPale }}>fly.glb</span> by victorberdugo1
+            (CC-BY-4.0). Handset{" "}
+            <span style={{ color: HUD.cyanPale }}>smartphone_with_green_screen.glb</span> by{" "}
+            <span style={{ color: HUD.cyanPale }}>peroroo</span> (CC-BY-SA-4.0, share-alike see
+            README). Wiring frozen; a 516-parameter readout learns the 97 phrases.{" "}
+            <span style={{ color: HUD.faint }}>
+              Measured: intact, shuffled, degree-matched random and the raw encoding with no
+              reservoir all reach the same accuracy, so the connectome confers no measurable
+              learning advantage on this task.
+            </span>
           </span>
         </div>
       </div>

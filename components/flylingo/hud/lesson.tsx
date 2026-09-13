@@ -1,6 +1,6 @@
 "use client";
 
-import { HUD, Label, Meter, Chip } from "./primitives";
+import { HUD, Label, Meter, Chip, Stat } from "./primitives";
 
 import type { AnswerResult, ApiChallenge } from "@/lib/flylingo/types";
 
@@ -12,6 +12,17 @@ import type { AnswerResult, ApiChallenge } from "@/lib/flylingo/types";
  * a single Check button, and green/red answer feedback. Only the surface changes, from the
  * clone's light card UI to hairline panels on near-black, so the lesson can sit inside a
  * broadcast frame without looking like an embedded website.
+ *
+ * Two things differ from the clone on purpose, because this is a demo of a brain answering
+ * rather than a person answering:
+ *
+ *  - The fly's own softmax is attached to each OPTION CARD, not drawn as a separate row of
+ *    anonymous bars. An earlier version showed four unlabelled bars under the options and a
+ *    reviewer could not tell which bar belonged to which answer, which defeats the point of
+ *    showing the readout at all. The probability now sits on the card it describes.
+ *  - The fly's pick is shown LIVE, before the user answers, from the streamed frame. That is
+ *    the honest version of the claim: the readout is computed continuously, so you can watch
+ *    it commit before you commit. It is marked as provisional until the answer locks it in.
  */
 export function HudLesson({
   challenge,
@@ -24,6 +35,9 @@ export function HudLesson({
   onSelect,
   onCheck,
   flyProbs,
+  answered,
+  total,
+  history,
 }: {
   challenge: ApiChallenge | null;
   selected: number | undefined;
@@ -35,6 +49,11 @@ export function HudLesson({
   onSelect: (i: number) => void;
   onCheck: () => void;
   flyProbs: number[];
+  /** questions answered so far, and how many the lesson holds */
+  answered: number;
+  total: number;
+  /** per-question outcome, oldest first, for the user and for the fly separately */
+  history: { user: boolean; fly: boolean }[];
 }) {
   const shortcutFor = (i: number) => `${i + 1}`;
 
@@ -59,13 +78,41 @@ export function HudLesson({
   const accent =
     status === "correct" ? HUD.green : status === "wrong" ? HUD.rose : HUD.cyan;
 
+  // The fly's live pick, taken straight from the streamed softmax. Once the user answers,
+  // the server's recorded choice is authoritative, so prefer it.
+  const livePick =
+    result?.fly_choice ??
+    (flyProbs.length > 0
+      ? flyProbs.reduce((best, p, i) => (p > flyProbs[best] ? i : best), 0)
+      : -1);
+  const locked = Boolean(result) && status !== "none";
+  const pickedOpt = livePick >= 0 ? challenge.options[livePick] : null;
+
+  const pct = Math.round(progress * 100);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       {/* progress and hearts */}
-      <div style={{ display: "flex", alignItems: "center", gap: 14, flex: "0 0 auto" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flex: "0 0 auto" }}>
         <Label tone="faint">progress</Label>
-        <div style={{ flex: "1 1 auto" }}>
-          <Meter value={progress} tone={accent} height={5} />
+        <div style={{ flex: "1 1 auto", display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ flex: "1 1 auto" }}>
+            <Meter value={progress} tone={accent} height={6} />
+          </div>
+          {/* A 0% bar reads as a broken bar, so the number carries the meaning and the
+              track is always visible behind it. */}
+          <span
+            style={{
+              fontVariantNumeric: "tabular-nums",
+              fontSize: 12,
+              fontWeight: 700,
+              color: progress > 0 ? HUD.text : HUD.faint,
+              minWidth: 34,
+              textAlign: "right",
+            }}
+          >
+            {pct}%
+          </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
           <span style={{ color: HUD.rose, fontSize: 14 }}>♥</span>
@@ -73,133 +120,252 @@ export function HudLesson({
         </div>
       </div>
 
-      {/* prompt */}
-      <div style={{ marginTop: 18, flex: "0 0 auto" }}>
-        <Label tone="faint">
-          {challenge.type} · difficulty {challenge.difficulty}
-        </Label>
-        <h2
-          style={{
-            margin: "8px 0 0",
-            fontSize: 30,
-            lineHeight: 1.2,
-            fontWeight: 700,
-            letterSpacing: "-0.015em",
-            color: HUD.text,
-          }}
-        >
-          {challenge.prompt}
-        </h2>
-      </div>
-
-      {/* options */}
+      {/* The question block is centred in the space between the progress strip and the
+          action bar. The panel is tall, so pinning the content to the top left a large
+          dead gap under the options; centring uses the height instead of wasting it. */}
       <div
         style={{
-          marginTop: 20,
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 12,
-          flex: "0 0 auto",
+          flex: "1 1 auto",
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
         }}
       >
-        {challenge.options.map((opt, i) => {
-          const isSel = selected === i;
-          const isAnswer = result ? i === result.answer_index : false;
-          const showState = status !== "none" && (isSel || (status === "wrong" && isAnswer));
-          const border = showState
-            ? status === "correct"
-              ? HUD.green
-              : isAnswer
-                ? HUD.green
-                : HUD.rose
-            : isSel
-              ? HUD.cyan
-              : HUD.line;
-          return (
-            <button
-              key={`${i}-${opt}`}
-              type="button"
-              disabled={pending || status !== "none"}
-              onClick={() => onSelect(i)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-                padding: "14px 16px",
-                background: showState
-                  ? status === "correct"
-                    ? "rgba(74,222,128,0.10)"
-                    : "rgba(240,97,107,0.10)"
-                  : isSel
-                    ? "rgba(91,200,214,0.10)"
-                    : HUD.panelAlt,
-                border: `1px solid ${border}`,
-                borderRadius: 3,
-                cursor: pending || status !== "none" ? "default" : "pointer",
-                color: HUD.text,
-                textAlign: "left",
-                font: "inherit",
-                transition: "border-color 120ms, background 120ms",
-              }}
-            >
-              <span style={{ fontSize: 18, fontWeight: 600 }}>{opt}</span>
-              <span
-                style={{
-                  flex: "0 0 auto",
-                  width: 24,
-                  height: 24,
-                  display: "grid",
-                  placeItems: "center",
-                  border: `1px solid ${isSel ? HUD.cyan : HUD.line}`,
-                  borderRadius: 3,
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: isSel ? HUD.cyan : HUD.faint,
-                }}
-              >
-                {shortcutFor(i)}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* the fly's own readout over the same options */}
-      {flyProbs.length > 0 && (
-        <div style={{ marginTop: 16, flex: "0 0 auto" }}>
-          <div
+        {/* the fly's live decision, shown before the user commits */}
+        <div
+          style={{
+            flex: "0 0 auto",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "15px 16px",
+            border: `1px solid ${locked ? HUD.lineStrong : "rgba(240,160,48,0.42)"}`,
+            borderRadius: 3,
+            background: locked ? HUD.panelAlt : "rgba(240,160,48,0.07)",
+          }}
+        >
+          <Label tone="amber" size={10}>
+            {locked ? "fly answered" : "fly is choosing"}
+          </Label>
+          <span
             style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: 6,
+              fontSize: 19,
+              fontWeight: 700,
+              color: pickedOpt ? HUD.text : HUD.faint,
+              flex: "1 1 auto",
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
           >
-            <Label tone="faint">fly readout over these options</Label>
-            <Label tone="faint">softmax</Label>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            {flyProbs.map((p, i) => (
-              <div key={i} style={{ flex: 1, minWidth: 0 }}>
-                <Meter value={p} tone={i === (result?.fly_choice ?? -1) ? HUD.amber : HUD.cyan} height={5} />
-                <div
-                  style={{
-                    marginTop: 3,
-                    fontSize: 10,
-                    color: HUD.faint,
-                    fontVariantNumeric: "tabular-nums",
-                  }}
-                >
-                  {(p * 100).toFixed(1)}%
+            {pickedOpt ?? "—"}
+          </span>
+          {pickedOpt && (
+            <span
+              style={{
+                fontVariantNumeric: "tabular-nums",
+                fontSize: 15,
+                fontWeight: 700,
+                color: HUD.cyanBright,
+              }}
+            >
+              {((flyProbs[livePick] ?? 0) * 100).toFixed(1)}%
+            </span>
+          )}
+          {locked && (
+            <Chip tone={result?.fly_correct ? "green" : "rose"}>
+              {result?.fly_correct ? "correct" : "wrong"}
+            </Chip>
+          )}
+        </div>
+
+        {/* prompt */}
+        <div style={{ marginTop: 26, flex: "0 0 auto" }}>
+          <Label tone="faint">
+            {challenge.type} · difficulty {challenge.difficulty}
+          </Label>
+          <h2
+            style={{
+              margin: "12px 0 0",
+              fontSize: 38,
+              lineHeight: 1.22,
+              fontWeight: 700,
+              letterSpacing: "-0.015em",
+              color: HUD.text,
+            }}
+          >
+            {challenge.prompt}
+          </h2>
+        </div>
+
+        {/* options, each carrying the fly's own probability for that option */}
+        <div
+          style={{
+            marginTop: 28,
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 16,
+            flex: "0 0 auto",
+          }}
+        >
+          {challenge.options.map((opt, i) => {
+            const isSel = selected === i;
+            const isAnswer = result ? i === result.answer_index : false;
+            const showState = status !== "none" && (isSel || (status === "wrong" && isAnswer));
+            const border = showState
+              ? status === "correct"
+                ? HUD.green
+                : isAnswer
+                  ? HUD.green
+                  : HUD.rose
+              : isSel
+                ? HUD.cyan
+                : HUD.line;
+            const p = flyProbs[i] ?? 0;
+            const isFlyPick = i === livePick;
+            return (
+              <button
+                key={`${i}-${opt}`}
+                type="button"
+                disabled={pending || status !== "none"}
+                onClick={() => onSelect(i)}
+                style={{
+                  position: "relative",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 13,
+                  padding: "28px 22px 24px",
+                  background: showState
+                    ? status === "correct"
+                      ? "rgba(74,222,128,0.10)"
+                      : "rgba(240,97,107,0.10)"
+                    : isSel
+                      ? "rgba(91,200,214,0.10)"
+                      : HUD.panelAlt,
+                  border: `1px solid ${border}`,
+                  borderRadius: 3,
+                  cursor: pending || status !== "none" ? "default" : "pointer",
+                  color: HUD.text,
+                  textAlign: "left",
+                  font: "inherit",
+                  transition: "border-color 120ms, background 120ms",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
+                  <span style={{ fontSize: 23, fontWeight: 600, flex: "1 1 auto", minWidth: 0 }}>
+                    {opt}
+                  </span>
+                  {/* the fly's own number for THIS option, so the mapping is unambiguous */}
+                  <span
+                    style={{
+                      fontVariantNumeric: "tabular-nums",
+                      fontSize: 15,
+                      fontWeight: 700,
+                      color: isFlyPick ? HUD.amberBright : HUD.faint,
+                    }}
+                  >
+                    {(p * 100).toFixed(1)}%
+                  </span>
+                  <span
+                    style={{
+                      flex: "0 0 auto",
+                      width: 28,
+                      height: 28,
+                      display: "grid",
+                      placeItems: "center",
+                      border: `1px solid ${isSel ? HUD.cyan : HUD.line}`,
+                      borderRadius: 3,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: isSel ? HUD.cyan : HUD.faint,
+                    }}
+                  >
+                    {shortcutFor(i)}
+                  </span>
                 </div>
-              </div>
-            ))}
+                {/* the fly's distribution for this option, directly under its text */}
+                <Meter
+                  value={p}
+                  tone={isFlyPick ? HUD.amber : HUD.cyan}
+                  height={4}
+                  track="rgba(120,160,200,0.16)"
+                />
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ marginTop: 18, flex: "0 0 auto" }}>
+          <Label tone="faint" size={10.5}>
+            amber bar = the fly&apos;s pick · cyan = its softmax over your options · 516-parameter
+            readout over a frozen connectome
+          </Label>
+        </div>
+      </div>
+
+      {/* The lesson's own record: one dot per question plus who is ahead. This is the
+          Duolingo progress idea and it gives the lower panel something real to say; the
+          earlier layout left a dead zone here. A dot is empty until answered, then green or
+          red, and the next question is ringed in amber. */}
+      <div
+        style={{
+          flex: "0 0 auto",
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 24,
+          marginTop: 16,
+        }}
+      >
+        <div>
+          <Label tone="faint" size={10}>
+            question track
+          </Label>
+          <div style={{ display: "flex", gap: 7, marginTop: 8 }}>
+            {Array.from({ length: Math.max(total, answered, 1) }).map((_, i) => {
+              const h = history[i];
+              const colour = h ? (h.user ? HUD.green : HUD.rose) : HUD.line;
+              const isNow = i === answered && status === "none";
+              return (
+                <div
+                  key={i}
+                  title={
+                    h
+                      ? `question ${i + 1}: you ${h.user ? "correct" : "wrong"}, fly ${
+                          h.fly ? "correct" : "wrong"
+                        }`
+                      : `question ${i + 1}`
+                  }
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: "50%",
+                    background: h ? colour : "transparent",
+                    border: `1px solid ${isNow ? HUD.amber : colour}`,
+                    boxShadow: isNow ? `0 0 9px ${HUD.amber}66` : undefined,
+                  }}
+                />
+              );
+            })}
           </div>
         </div>
-      )}
-
-      <div style={{ flex: "1 1 auto", minHeight: 12 }} />
+        <div style={{ display: "flex", gap: 34 }}>
+          <Stat
+            label="fly score"
+            value={`${history.filter((h) => h.fly).length}/${answered}`}
+            tone="cyan"
+            size={22}
+          />
+          <Stat
+            label="your score"
+            value={`${history.filter((h) => h.user).length}/${answered}`}
+            tone="green"
+            size={22}
+          />
+        </div>
+      </div>
 
       {/* footer: feedback plus the single action button */}
       <div

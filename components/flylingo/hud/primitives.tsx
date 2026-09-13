@@ -273,6 +273,90 @@ export function Chip({
   );
 }
 
+/**
+ * Measures its own box and passes the exact pixel size to a WebGL child.
+ *
+ * Both visualizations take explicit width/height props and the HUD previously hardcoded
+ * them. That silently drifted from the panel geometry: the specimen canvas was rendered at
+ * 698x430 inside a panel whose body was only 315px tall, so `overflow: hidden` clipped the
+ * bottom ~115px of every frame. That cut off the fly's legs and its contact shadow, which is
+ * exactly the detail the grounding work depends on, and it is a large part of why the fly
+ * read as floating in the app while looking better in the standalone harness.
+ *
+ * Measuring instead of guessing means the canvas always matches its box, and it cannot drift
+ * again when the surrounding layout changes.
+ */
+export function FitBox({
+  children,
+  minHeight = 80,
+}: {
+  children: (size: { width: number; height: number }) => React.ReactNode;
+  minHeight?: number;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setSize((prev) => {
+        const w = Math.max(1, Math.round(r.width));
+        const h = Math.max(minHeight, Math.round(r.height));
+        return prev.width === w && prev.height === h ? prev : { width: w, height: h };
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [minHeight]);
+
+  return (
+    <div ref={ref} style={{ width: "100%", height: "100%", minHeight: 0, overflow: "hidden" }}>
+      {size.width > 0 ? children(size) : null}
+    </div>
+  );
+}
+
+/**
+ * A colour key entry for a canvas-based view.
+ *
+ * The connectome cloud draws its own legend inside the canvas, but the HUD scales the whole
+ * stage to fit 16:9, which turned that legend into an unreadable grey smear over the point
+ * cloud. The HUD therefore renders the key itself, in DOM type at a size that survives the
+ * scale, next to the figures. `swatch` is the exact colour the shader uses.
+ */
+export function LegendDot({
+  swatch,
+  children,
+}: {
+  swatch: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: 2,
+          background: swatch,
+          flex: "0 0 auto",
+        }}
+      />
+      <Label size={10} tone="dim">
+        {children}
+      </Label>
+    </span>
+  );
+}
+
 /** Rolling sparkline for a metric, matching the HUD's restrained chart language. */
 export function Spark({
   values,

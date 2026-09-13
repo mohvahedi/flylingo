@@ -37,13 +37,14 @@ import {
   type ReactNode,
 } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { ContactShadows, OrbitControls } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { Fly } from './fly/Fly';
 import { RealFly } from './fly/RealFly';
 import { useAnimator, type LiveReadout } from './fly/animator';
 import { CHANNELS, modeLabel } from './fly/regions';
 import { groundMaterial } from './fly/materials';
+import { SLAB, createSlabGeometry } from './fly/slab';
 import { RIG, SHADOW_EXTENT, StudioEnvironment } from './fly/studio';
 import { Bloom } from './fly/Bloom';
 import type { Behavior, Pose, ReactionKind } from './fly/pose';
@@ -277,8 +278,11 @@ function Stage({
     timeScale,
   });
 
-  // the floor is procedural too: one material, patched to fade radially to true black
-  const ground = useMemo(() => groundMaterial(7), []);
+  // the stage is procedural too: one bounded slab, one material, its gradient and its contact
+  // pool measured from the same half extents the geometry is built from
+  const slab = useMemo(() => createSlabGeometry(), []);
+  useEffect(() => () => slab.dispose(), [slab]);
+  const ground = useMemo(() => groundMaterial(SLAB.hx, SLAB.hz), []);
   useEffect(() => () => ground.dispose(), [ground]);
 
   // publish the cheap bits for the overlays; the overlays poll a few times a second
@@ -383,34 +387,51 @@ function Stage({
         shadows={shadows}
       />
 
-      {/* ground: one dark disc that fades to true black at the rim, so there is no plane
-          edge and no horizon, plus a scale ring, no texture, no clutter. It receives the
-          key light's shadow, which is the long wedge that puts the fly in the space. */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow material={ground}>
-        <circleGeometry args={[7, 96]} />
-      </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]}>
-        <ringGeometry args={[1.55, 1.575, 96]} />
+      {/* ground: a bounded, lit slab with real thickness, not a disc that fades. Its top face
+          is on y=0 and its rim is inside the frame, so the fly stands on an object that has a
+          silhouette, and everything beyond that rim is the near black void. The gradient and
+          the contact pool live in the material (fly/materials.ts), measured from these same
+          half extents, so the shading and the geometry cannot drift apart. */}
+      <mesh
+        name="ground"
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, 0, 0]}
+        receiveShadow
+        geometry={slab}
+        material={ground}
+      />
+      {/* the scale rings, scaled with the slab: at their old 1.55 and 2.6 radii they would have
+          reached past a 2.30 x 2.10 slab and drawn a circle out over the void. The outer one now
+          stops at 0.72 of the half extent, which keeps it clear of the rim band as well. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]} name="ring-inner">
+        <ringGeometry args={[0.96, 0.975, 96]} />
         <meshBasicMaterial color="#22d3ee" transparent opacity={0.14} />
       </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.006, 0]}>
-        <ringGeometry args={[2.6, 2.615, 96]} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.006, 0]} name="ring-outer">
+        <ringGeometry args={[1.52, 1.532, 96]} />
         <meshBasicMaterial color="#38bdf8" transparent opacity={0.05} />
       </mesh>
 
-      {/* a depth based contact pool under the body, in addition to the real cast shadow and
-          to the per tarsus patches the fly draws itself (fly/contacts.ts). `far` is tight on
-          purpose: only geometry close to the floor contributes, so it reads as contact. */}
+      {/* The fly's cast shadow, drawn as its own overlay. three's ShadowMaterial renders nothing
+          but `opacity * (1 - getShadowMask())`, so this multiplies the finished slab wherever the
+          fly blocks the key light. That matters because the key is only 21 degrees above the
+          horizon: a shadow drawn by darkening the slab's own albedo removes just the key's own
+          share of a horizontal surface, about 2 luma out of 30, and the fly looks like it casts
+          nothing. As an overlay the depth of the shadow is art directed (opacity) instead of
+          being diluted by the fill, the bounce and the environment.
+          This replaces drei's ContactShadows, which was painting its whole 3.4 x 3.4 plane near
+          black: with the fly hidden, the floor under it read 12.2 against 44.8 with ?noshadow,
+          and the key's shadow map accounted for none of it (12.20 -> 12.19 when switched off). */}
       {shadows && (
-        <ContactShadows
-          position={[0, 0.002, 0]}
-          opacity={0.75}
-          scale={3.4}
-          blur={3}
-          far={1.0}
-          resolution={512}
-          color="#00060c"
-        />
+        <mesh
+          name="ground-shadow"
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[0, 0.0035, 0]}
+          receiveShadow
+          geometry={slab}
+        >
+          <shadowMaterial transparent depthWrite={false} opacity={0.5} color="#00060c" />
+        </mesh>
       )}
 
       <OrbitControls
@@ -429,8 +450,29 @@ function Stage({
 
       {bloom && <Bloom />}
       {onStats && <StatsProbe onStats={onStats} />}
+      <SceneProbe />
     </>
   );
+}
+
+/**
+ * Publishes the three scene on window so a headless probe can hide one piece of the rig at
+ * a time and measure what is left (for example: how much of the frame the ground actually
+ * occupies, with the fly hidden). One effect, no per-frame cost.
+ */
+function SceneProbe() {
+  const scene = useThree((s) => s.scene);
+  const camera = useThree((s) => s.camera);
+  useEffect(() => {
+    const w = window as unknown as { __flyScene?: THREE.Scene; __flyCamera?: THREE.Camera };
+    w.__flyScene = scene;
+    w.__flyCamera = camera;
+    return () => {
+      delete w.__flyScene;
+      delete w.__flyCamera;
+    };
+  }, [scene, camera]);
+  return null;
 }
 
 export function FlyStage({

@@ -20,12 +20,23 @@
  */
 import * as THREE from 'three';
 import type { ChannelKind } from './regions';
+import { SLAB } from './slab';
 
-type UniformValue = { value: number } | { value: THREE.Vector3 };
+type UniformValue =
+  | { value: number }
+  | { value: THREE.Vector2 }
+  | { value: THREE.Vector3 }
+  | { value: THREE.Vector4 };
 
 type Patch = {
   /** program cache key. Materials that share a key share one compiled program. */
   key: string;
+  /**
+   * Optional global scope declarations, injected with HELPERS rather than inside the body.
+   * GLSL ES only allows `uniform` at global scope, so anything the body needs beyond the
+   * shared set below has to be declared here.
+   */
+  prelude?: string;
   /** statements appended to the end of the fragment main(), right after the emissive term */
   body: string;
   /** extra uniforms. Values are per material instance, so a shared program is still safe. */
@@ -101,8 +112,15 @@ function patchMaterial(material: THREE.MeshPhysicalMaterial, p: Patch): THREE.Me
       '\tvObjPos = position;',
       'the vertex main',
     );
+    const prelude = p.prelude ? `${p.prelude}\n${HELPERS}` : HELPERS;
     shader.fragmentShader = after(
-      after(shader.fragmentShader, '#include <common>', HELPERS, 'the fragment prelude'),
+      shader.fragmentShader,
+      '#include <common>',
+      prelude,
+      'the fragment prelude',
+    );
+    shader.fragmentShader = after(
+      shader.fragmentShader,
       '#include <emissivemap_fragment>',
       p.body,
       'the physical fragment main',
@@ -430,16 +448,80 @@ export function setaeMaterial(): THREE.MeshPhysicalMaterial {
 /* ----------------------------------------------------------------- ground */
 
 /**
- * Ground. A radial falloff to true black rather than a plane that ends, so there is no
- * visible edge and no horizon; the fly and its shadow sit in a pool of light that dies
- * out. Clearcoat on a low frequency grain gives the key light something to streak across,
- * which is what makes a floor look like a floor under a hard source.
+ * Ground. A bounded slab, not a disc that fades.
+ *
+ * History, because the previous shape was not an accident: this was a 7 unit radius disc whose
+ * albedo went as fade*fade, smoothstep(7.8, 3.4, r), so it died to true black before any rim
+ * came into frame. The intent was "no plane edge, no horizon". The effect was that the surface
+ * the fly stands on had no silhouette and almost no value where its shadow landed, and every
+ * measurement of the shadow's *absolute* darkening (57% at one point) came with a *local*
+ * contrast of 17%: the shadow was dark, but the floor around it was dark too, so the eye had
+ * nothing to read it against. The fly read as floating in a void.
+ *
+ * Now the slab is a physical object: the gradient below is measured from the slab's own edges
+ * (uSlabHalf, from fly/slab.ts, the same numbers the geometry is built from), it ends on a
+ * crease just inside the rim rather than on a fade, and the skirt under that rim is darker,
+ * which is what makes the shape read as a solid with thickness. Beyond the rim there is nothing
+ * but the near black void, so the slab is the only lit surface in the frame.
+ *
+ * Three terms, in the order they matter:
+ *
+ *   shaped     the gradient. Brightest under the fly, 0.72 at the far rim, so the top face
+ *              reads as a surface turning away from the key rather than as a flat fill.
+ *   the crease a narrow darker band just inside the edge, so the silhouette is a line and not
+ *              the last stop of a gradient.
+ *   uPool      the contact pool: a soft ellipse under the body. This is the term that makes
+ *              the fly look like it is standing on something. It multiplies the albedo rather
+ *              than adding a dark decal, so the ambient and the keyed light darken together and
+ *              the pool stays under the fly however the cast shadow of the moment falls.
  */
+const GROUND_PRELUDE = /* glsl */ `
+uniform vec2 uSlabHalf;
+/** xy = centre, zw = radii, in the slab's own object space (x, y) = (world x, -world z) */
+uniform vec4 uPool;
+uniform float uPoolStrength;
+/** how much of its albedo the pool removes at its centre, at full strength */
+uniform float uPoolDepth;
+/** how much the slab's rim band brightens, so the silhouette is an edge and not a fade */
+uniform float uRim;
+`;
+
 const GROUND_BODY = /* glsl */ `
 {
-	float r = length( vObjPos.xy );
-	float fade = smoothstep( 7.8, 3.4, r );
-	diffuseColor.rgb *= fade * fade;
+	vec2 p = abs( vObjPos.xy ) / uSlabHalf;
+	float e = max( p.x, p.y );
+	// the top face, turning gently away from the key
+	float shaped = mix( 1.0, 0.78, smoothstep( 0.0, 1.0, e ) );
+	// THE RIM. This is the fix, and the previous two attempts are why it is written this way.
+	//
+	// The old floor multiplied its albedo by a quadratic fade that reached zero at r=3.4 while the
+	// geometry ran to r=7, so the surface was already black well before its own edge: the boundary
+	// was the tail of a gradient, not an edge, and a viewer reading the render said the stage
+	// "fades into black rather than ending at a clear edge". Darkening the rim further (the crease
+	// that was here) made it worse.
+	//
+	// So the last band BRIGHTENS instead. The gradient bottoms out around 0.78 two thirds of the
+	// way out and the rim then climbs back to about 1.25x the centre value, which reads as the
+	// slab's chamfered edge catching the key. Nothing can brighten beyond e=1 because there is no
+	// geometry there, so the step from the lit rim to the black void is as hard as the silhouette
+	// allows - which is the whole point, and it is what a bounded slab has and a faded disc
+	// cannot have.
+	float rim = smoothstep( 0.80, 0.995, e );
+	shaped *= 1.0 + uRim * rim;
+	// the contact pool under the body
+	vec2 q = ( vObjPos.xy - uPool.xy ) / uPool.zw;
+	float pool = 1.0 - smoothstep( 0.25, 1.0, length( q ) );
+	shaped *= 1.0 - uPoolStrength * uPoolDepth * pool;
+	// the skirt, the slab's vertical face. Held at full albedo because its normal meets the key far
+	// more squarely than the top face does (0.87 against 0.37 of the key's irradiance on the near
+	// and right walls), so wherever any of it is in frame it is the brightest thing on the slab.
+	// Ray casting says no wall is visible from the hero camera at any thickness - the far wall is
+	// hidden under the top face and the others are below the frame or facing away - so this is not
+	// what carries the edge here. It stays because a wall as dark as the void behind it would have
+	// no silhouette the moment the framing changed.
+	float wall = smoothstep( 0.0, -0.02, vObjPos.z );
+	shaped = mix( shaped, 1.0, wall );
+	diffuseColor.rgb *= shaped;
 	roughnessFactor = clamp(
 		roughnessFactor + 0.14 * flHash13( vObjPos * 26.0 ),
 		0.02, 1.0
@@ -447,14 +529,37 @@ const GROUND_BODY = /* glsl */ `
 }
 `;
 
-export function groundMaterial(radius = 7): THREE.MeshPhysicalMaterial {
+/**
+ * Cast shadow. Not in this material.
+ *
+ * The first attempt was to deepen the shadow inside this shader, by multiplying the albedo by a
+ * shadow factor: the key light is only 21 degrees above the horizon, so a shadow that removes
+ * just the key's own share of a horizontal slab removes ~2 luma and the fly looks like it casts
+ * nothing. The obvious lever is drei's ContactShadows or a getShadowMask() call, and neither
+ * works here:
+ *
+ *   - ContactShadows (opacity 0.75, scale 3.4, far 1.0) was painting its entire 3.4 x 3.4 plane
+ *     near black. Measured with the fly hidden so nothing could cast, the near floor read 12.2
+ *     with it mounted and 44.8 with ?noshadow, and switching the key's shadow map off changed
+ *     nothing (12.20 -> 12.19). That uniform black quad WAS the void the fly floated over.
+ *   - getShadowMask() is declared by <shadowmask_pars_fragment>, which three only includes in
+ *     ShadowMaterial, not in the physical shader: calling it from an injected body fails to
+ *     compile ("no matching overloaded function found") anywhere in the physical fragment.
+ *
+ * So the cast shadow is drawn the way three intends it to be drawn, as a separate
+ * ShadowMaterial overlay on the slab (see `ground-shadow` in FlyStage.tsx). Its alpha is
+ * `opacity * (1 - getShadowMask())`, so it multiplies the finished slab wherever the fly blocks
+ * the key, which is a lever the light rig cannot dilute. The pool below is the other half: a
+ * soft, always-on contact occlusion under the body.
+ */
+export function groundMaterial(hx: number, hz: number): THREE.MeshPhysicalMaterial {
   const m = new THREE.MeshPhysicalMaterial({
     // lifted from near black on purpose: a floor that is too dark to see cannot show a
     // cast shadow, and the shadow is what puts the fly on the ground rather than on a
     // gradient. Measured: at '#141c25' the whole shadow rig darkened the floor by only
     // 11.6%, which reads as no shadow at all. Raised so the shadow has something to
     // subtract from. Still far below any value that would put a visible horizon in frame.
-    color: new THREE.Color('#3a4657'),
+    color: new THREE.Color('#44505f'),
     roughness: 0.58,
     metalness: 0.0,
     clearcoat: 0.22,
@@ -462,10 +567,22 @@ export function groundMaterial(radius = 7): THREE.MeshPhysicalMaterial {
     envMapIntensity: 0.8,
   });
   return patchMaterial(m, {
-    key: 'fly-ground-1',
+    key: 'fly-ground-2',
+    prelude: GROUND_PRELUDE,
     body: GROUND_BODY,
     uniforms: {
-      uPatA: { value: radius },
+      uSlabHalf: { value: new THREE.Vector2(hx, hz) },
+      uPool: {
+        value: new THREE.Vector4(SLAB.poolX, SLAB.poolY, SLAB.poolRx, SLAB.poolRz),
+      },
+      // 1 = the shipped look. tools/ground_local.py sets this to 0 on the live material to
+      // measure the pool's own local contrast, the same way ?noshadow ablates the shadow rig.
+      uPoolStrength: { value: 1 },
+      uPoolDepth: { value: 0.60 },
+      // 0.6 puts the rim at ~1.25x the slab's centre value: bright enough that the boundary reads
+      // as an edge against the black void, not so bright that the slab looks like it is glowing
+      uRim: { value: 0.6 },
+      uPatA: { value: hx },
       uPatB: { value: 1 },
       uGroove: { value: 0 },
       uGrain: { value: 0 },
