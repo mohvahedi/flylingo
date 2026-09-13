@@ -75,10 +75,13 @@ export function HudTraining({
     setCurve((h) => [...h.slice(-119), windowAccuracy]);
   }, [windowSize, windowAccuracy]);
 
-  const early = curve.length >= 6 ? curve.slice(0, Math.max(3, Math.floor(curve.length / 3))) : [];
-  const late = curve.length >= 6 ? curve.slice(-Math.max(3, Math.floor(curve.length / 4))) : [];
   const mean = (a: number[]) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
-  const gain = early.length && late.length ? mean(late) - mean(early) : 0;
+  // Peak of the recent window against the opening, not last-point against first-third: accuracy
+  // dips when the course moves on to harder material, and a strict end-to-end comparison then
+  // reported "no clear trend" across a climb from chance to the high nineties.
+  const early = curve.length >= 8 ? curve.slice(0, 8) : [];
+  const late = curve.length >= 8 ? curve.slice(-10) : [];
+  const gain = early.length && late.length ? Math.max(...late) - mean(early) : 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%" }}>
@@ -164,7 +167,9 @@ export function HudTraining({
           <span>chance 25%</span>
           {curve.length >= 6 ? (
             <span style={{ color: gain > 0.05 ? HUD.green : HUD.faint }}>
-              {gain > 0.05 ? `improving  ${gain > 0 ? "+" : ""}${(gain * 100).toFixed(0)} points` : "no clear trend yet"}
+              {gain > 0.05
+                ? `peak +${(gain * 100).toFixed(0)} points above its start`
+                : "no gain yet"}
             </span>
           ) : (
             <span>collecting answers…</span>
@@ -235,10 +240,17 @@ export function HudTraining({
         <Stat label="learnt" value={`${learnedCorrect}/${learnedAnswered}`} size={18} tone="cyan" />
         <Stat label="rehearsals" value={rehearsals.toLocaleString("en-US")} size={18} />
         <Stat label="memory" value={`${replaySize} seen`} size={18} />
-        <Stat label="entropy" value={entropy.toFixed(2)} size={18} />
+        <Stat
+          label="entropy"
+          /* Clamped: a tiny negative value from floating point rendered as "-0.00". */
+          value={Math.abs(entropy) < 0.005 ? "0.00" : entropy.toFixed(2)}
+          size={18}
+        />
         <Stat label="params" value={String(params)} size={18} />
         <Stat
-          label="lessons done"
+          label="full laps"
+          /* Not "lessons done", which beside "lesson 7 / 15" looked like a contradiction: this
+             counts complete passes through the whole course, a different quantity. */
           value={String(lessonsCompleted)}
           size={18}
           tone={lessonsCompleted > 0 ? "green" : "text"}

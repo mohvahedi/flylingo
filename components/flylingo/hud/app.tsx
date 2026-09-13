@@ -630,7 +630,10 @@ export function HudApp() {
               />
               <Stat
                 label="readout"
-                value={trained ? "trained" : "untrained"}
+                /* "untrained" was read as "not training" and looked like a contradiction beside
+                   a panel reporting thousands of rehearsal steps. It means the readout STARTED
+                   from nothing, so it now uses the panel's own wording. */
+                value={trained ? "pretrained" : "from scratch"}
                 tone={trained ? "green" : "amber"}
                 size={20}
               />
