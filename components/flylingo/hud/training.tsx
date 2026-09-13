@@ -293,7 +293,8 @@ export function HudTraining({
             {rehearsals.toLocaleString("en-US")} rehearsal steps from what it has already seen:
             memorisation of the phrase-to-answer mapping. The connectome confers{" "}
             <span style={{ color: HUD.dim }}>no measurable learning advantage</span> — intact,
-            shuffled, random and no recurrence all reach the same accuracy.
+            shuffled and random all reach the same accuracy, and only the edge-free control
+            fails.
           </>
         ) : (
           <>
