@@ -347,6 +347,109 @@ class FlyReservoir:
             self._prod[:] = self.graph @ vec
         return self._prod
 
+    # --------------------------------------------------- settling and plasticity
+
+    def settle(self, embedding, steps: int = 8):
+        """Run the recurrence ``steps`` times with the input held, and return the settled state.
+
+        This is the real dynamics: each step feeds the previous state back through the connectome,
+        so the wiring shapes the trajectory and the fixed point it reaches. ``step`` already writes
+        ``self.state`` in place, so repeated calls settle naturally; nothing is reset in between.
+        """
+        if steps < 1:
+            raise ValueError("steps must be >= 1")
+        feat = None
+        for _ in range(int(steps)):
+            feat = self.step(embedding)
+        return self.state.copy(), feat
+
+
+    def enable_plasticity(self, pool_of_row: np.ndarray, max_edges: int | None = None,
+                          seed: int | None = None) -> dict:
+        """Mark the real edges that end on a pooled neuron as plastic.
+
+        ``pool_of_row`` is an (n,) int array giving each neuron's pool index, or -1 for neurons that
+        belong to no pool. Only edges whose TARGET is pooled are selected, because those are the
+        synapses that directly drive the populations the answer is read from.
+
+        The random-graph control is built here rather than lazily, so every mode has its own pristine
+        edge weights captured before any plasticity is applied. Without that, switching modes could
+        leave one control running on another's modified weights.
+
+        This does NOT touch the mode. It used to force `intact` so the connectome matrix was the
+        active one while capturing pristine weights, but that silently overrode the caller's
+        control condition: a shuffled or random run would quietly execute on the intact graph and
+        report the intact result. Both matrices are captured explicitly below, so nothing needs
+        forcing, and whatever mode the caller chose stays chosen.
+        """
+        mode_at_entry = self._mode
+        csr = self.graph.tocsr()
+        rows = np.repeat(np.arange(self.n, dtype=np.int64), np.diff(csr.indptr))
+        mask = np.asarray(pool_of_row)[rows] >= 0
+        pos = np.flatnonzero(mask)
+
+        if max_edges is not None and pos.size > int(max_edges):
+            rng = np.random.default_rng(self.seed if seed is None else seed)
+            pos = np.sort(rng.choice(pos, int(max_edges), replace=False))
+
+        self.plastic_pos = pos.astype(np.int64)
+        self.plastic_pre = csr.indices[pos].astype(np.int64)
+        self.plastic_pool = np.asarray(pool_of_row)[rows[pos]].astype(np.int64)
+        self.plastic_scale = np.ones(pos.size, np.float32)
+
+        # Make the control matrix exist now so its pristine weights are captured before any
+        # plasticity is applied.
+        self.random_graph()
+        self._pristine = {
+            "graph": csr.data[self.plastic_pos].copy(),
+            "random": self._random_graph.data[self.plastic_pos].copy(),
+        }
+        self.apply_plastic()
+        if self._mode != mode_at_entry:
+            self.set_mode(mode_at_entry)
+
+        return {
+            "plastic_edges": int(pos.size),
+            "pooled_neurons": int(np.sum(np.asarray(pool_of_row) >= 0)),
+            "of_total_edges": int(csr.nnz),
+        }
+
+
+    def apply_plastic(self) -> None:
+        """Write ``pristine * scale`` into the CSR data of every matrix, in place.
+
+        Idempotent: writing the same scaled values twice is a no-op, so this is safe to call after
+        any scale change and after any mode switch. Both the connectome and the random control are
+        written, each from its own pristine weights, so the two never contaminate each other.
+        """
+        if getattr(self, "plastic_pos", None) is None:
+            return
+        scale = self.plastic_scale
+        for key, mat in (("graph", self.graph), ("random", self._random_graph)):
+            if mat is None:
+                continue
+            base = self._pristine.get(key)
+            if base is None:
+                base = mat.data[self.plastic_pos].copy()
+                self._pristine[key] = base
+            mat.data[self.plastic_pos] = base * scale
+
+
+    def plastic_stats(self) -> dict:
+        """What the plastic synapses look like now, for the UI and for the record."""
+        if getattr(self, "plastic_pos", None) is None:
+            return {"enabled": False}
+        s = self.plastic_scale
+        return {
+            "enabled": True,
+            "edges": int(s.size),
+            "mean": float(np.mean(s)),
+            "min": float(np.min(s)),
+            "max": float(np.max(s)),
+            "changed": int(np.sum(s != 1.0)),
+            "l1_change": float(np.sum(np.abs(s - 1.0))),
+        }
+
     def step_timed(self, embedding, mode: str = None) -> np.ndarray:
         """``step`` plus a measured wall-clock duration for the whole update."""
         t0 = time.perf_counter()

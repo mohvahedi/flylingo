@@ -294,6 +294,71 @@ def _pulse_dopamine(correct: bool) -> float:
     return level
 
 
+def _active_parameters() -> int:
+    """How many trainable parameters the ACTIVE readout has.
+
+    The plastic brain's parameters are synaptic scales on real connectome edges, and it has no
+    `adapter`, so reporting the adapter's 516 here would have been a flat lie in the UI: it said
+    516 while the thing learning had 117,800 plastic synapses.
+    """
+    if STATE.get("readout_kind") == "plastic_brain":
+        pb = STATE.get("plastic_brain")
+        if pb is not None:
+            return int(pb.r.plastic_scale.size)
+        return 0
+    return int(STATE["adapter"].parameters())
+
+
+def _plastic_telemetry() -> dict:
+    """What the brain's own synapses are doing, for the live panel.
+
+    Without this the UI could not show that the thing being learned is the wiring: every number
+    it had described the old bolted-on readout.
+    """
+    pb = STATE.get("plastic_brain")
+    if pb is None or STATE.get("readout_kind") != "plastic_brain":
+        return {}
+    s = pb.r.plastic_scale
+    return {
+        "plastic_edges": int(s.size),
+        "plastic_of_total": float(s.size / max(1, pb.r.graph.nnz)),
+        "plastic_scale_mean": float(np.mean(s)),
+        "plastic_scale_std": float(np.std(s)),
+        "plastic_scale_max": float(np.max(s)),
+        "plastic_updates": int(pb.updates),
+        "plastic_settle_steps": int(pb.steps),
+        "plastic_pools": int(pb.n_pools),
+        "plastic_pool_size": int(pb.pool_size),
+    }
+
+
+def _plastic_brain():
+    """The plastic brain, built once and cached.
+
+    It gets its OWN reservoir over the SAME connectome object, for two reasons. Settling resets
+    the state, and the tick loop steps the state continuously, so sharing one instance would have
+    them overwriting each other's dynamics. And because both reservoirs point at the same
+    connectome matrix, the plastic weights this one writes are the same weights the live view
+    renders -- so the brain on screen is the brain that is learning, not a copy of it.
+    """
+    pb = STATE.get("plastic_brain")
+    if pb is None:
+        from .plastic_brain import PlasticBrain
+
+        own = FlyReservoir(STATE["connectome"], embedding_dim=EMBED_DIM, dims=DIMS, seed=7301)
+        pb = PlasticBrain(
+            own,
+            n_pools=4,
+            pool_size=200,
+            seed=99,
+            steps=PLASTIC_SETTLE_STEPS,
+            max_plastic_edges=PLASTIC_MAX_EDGES,
+            lr=PLASTIC_LR,
+        )
+        STATE["plastic_brain"] = pb
+    return pb
+
+
 def _decision_features(ch: dict) -> np.ndarray:
     """The feature vector the readout decides on. ONE definition, used everywhere.
 
@@ -303,6 +368,12 @@ def _decision_features(ch: dict) -> np.ndarray:
     answering used the challenge embedding, so a trained readout displayed near-uniform
     probabilities next to confident answers.
     """
+    if STATE.get("readout_kind") == "plastic_brain":
+        # Same path as the decision, so the displayed probabilities always belong to the choice
+        # the fly actually makes.
+        emb = encode_text(ch["prompt"])
+        STATE["probs"] = _plastic_brain().probs(emb)
+        return
     if STATE.get("readout_kind") == "prompt_index":
         # Trained on features of the PROMPT alone.
         dr = STATE["decision_reservoir"]
@@ -403,6 +474,23 @@ REPLAY_CAPACITY = 256
 #: entropy in the live frame are the check that it stays sane.
 TRAIN_LR = 0.35
 
+# --- the plastic brain's own settings
+#
+# Settling steps: the recurrence has to run for the wiring to shape the trajectory. Measured
+# convergence is around 10 steps (8 and 14 steps differ by 0.0016), so 6 keeps most of the
+# dynamics at about 105 ms a decision.
+PLASTIC_SETTLE_STEPS = 6
+# Plastic edge cap. Pooling 200 neurons per answer gives ~117,800 real edges onto those
+# populations from the full connectome; this is the cap, not a target.
+PLASTIC_MAX_EDGES = 120_000
+# Adam step for the synaptic scales. The raw gradient is ~1e-6 because anatomical weights are
+# row-normalised, so a plain step of that size does nothing at all -- see plastic_brain.py.
+PLASTIC_LR = 0.01
+# Rehearsal steps per answer for the plastic brain. Each is a settle plus an update (~105 ms), so
+# this sets how fast the demo learns on screen. Measured: without it the live curve needs about
+# ninety minutes to leave chance, with it the change is visible inside a minute.
+PLASTIC_REPLAY_STEPS = 20
+
 
 # --------------------------------------------------------------------- helpers
 
@@ -474,6 +562,8 @@ def _current_frame(state: dict, chosen=None, reward=None, correct=None) -> dict:
         "lesson_title": _lesson_title(sess.lesson_id) if sess else None,
         "readout_kind": STATE.get("readout_kind"),
         "checkpoint_status": STATE.get("checkpoint_status"),
+        # ---- the brain's own synapses, when it is the thing that learns ----
+        **_plastic_telemetry(),
         "entropy": float(STATE.get("last", {}).get("entropy", 0.0)),
         "grad_norm": float(STATE.get("last", {}).get("grad_norm", 0.0)),
         "rehearsals": int(STATE.get("rehearsals", 0)),
@@ -625,20 +715,60 @@ def answer(req: AnswerReq) -> dict:
     # between the step and the reward assignment, which would associate the reward with the
     # wrong state.
     with lock:
-        f = _decision_features(ch)
-        action, logprob = adapter.sample(f, STATE["rng"])
-        probs = adapter.probs(f)
+        if STATE.get("readout_kind") == "plastic_brain":
+            # The brain chooses: settle the connectome, then read the answer pools. There is no
+            # classifier between the neurons and the decision.
+            pb = _plastic_brain()
+            emb = encode_text(ch["prompt"])
+            probs = pb.probs(emb)
+            action = int(np.argmax(probs))
+            logprob = float(np.log(max(float(probs[action]), 1e-12)))
 
-        # The fly is rewarded for its OWN sampled action being right, never for the user's.
-        # Rewarding it for a choice it did not make would train on noise.
-        fly_correct = int(action) == int(ch["correctIndex"])
-        reward = 1.0 if fly_correct else -0.25
-        info = adapter.observe(reward, logprob, f)
+            fly_correct = action == int(ch["correctIndex"])
+            reward = 1.0 if fly_correct else -0.25
+            # The brain learns: a gradient step on its own synapses, onto the answer population
+            # that should have won. This is the whole point of the architecture -- the wiring
+            # being changed is real wiring, not a readout beside it.
+            if STATE.get("training", True):
+                info = pb.observe(emb, int(ch["correctIndex"]))
+
+                # Rehearsal, for the plastic brain specifically.
+                #
+                # Without it the live demo learns too slowly to watch: one update per answer
+                # means ~5 seconds of wall clock per gradient step, and the measured curve needs
+                # roughly a thousand steps to leave chance, which is about ninety minutes of
+                # screen time. Rehearsing from what the fly has already seen is what makes the
+                # learning visible in a recording without changing what is being learned -- the
+                # same synapses, the same rule, the same examples, just revisited.
+                pb_buf = STATE.setdefault("pb_replay", [])
+                pb_buf.append((emb.copy(), int(ch["correctIndex"])))
+                if len(pb_buf) > REPLAY_CAPACITY:
+                    del pb_buf[0]
+                if len(pb_buf) > 1:
+                    for _ in range(PLASTIC_REPLAY_STEPS):
+                        k = int(STATE["rng"].integers(0, len(pb_buf)))
+                        pb.observe(pb_buf[k][0], pb_buf[k][1])
+                    STATE["rehearsals"] = int(STATE.get("rehearsals", 0)) + PLASTIC_REPLAY_STEPS
+            else:
+                info = {"loss": float(-np.log(max(float(probs[action]), 1e-12)))}
+            f = None
+        else:
+            f = _decision_features(ch)
+            action, logprob = adapter.sample(f, STATE["rng"])
+            probs = adapter.probs(f)
+
+            # The fly is rewarded for its OWN sampled action being right, never for the user's.
+            # Rewarding it for a choice it did not make would train on noise.
+            fly_correct = int(action) == int(ch["correctIndex"])
+            reward = 1.0 if fly_correct else -0.25
+            info = adapter.observe(reward, logprob, f)
 
         # Rehearsal. The reward-only step above reinforces the sampled action and nothing more,
         # which measured as a plateau near 45%; these steps learn from the lesson's answer key
         # against remembered examples, which measured as reaching 92-100% within a session.
         if STATE.get("training", True) and STATE.get("readout_kind") == "prompt_index":
+            # Not applicable to the plastic brain: its observe() already trains the connectome's
+            # own synapses, so rehearsal here would be a second, unrelated mechanism.
             truth = int(ch["correctIndex"])
             if hasattr(adapter, "observe_supervised"):
                 info = adapter.observe_supervised(truth, lr=TRAIN_LR)
@@ -763,6 +893,10 @@ class TrainReq(BaseModel):
     training: bool | None = None
     lr: float | None = None
     replay_steps: int | None = None
+    #: Which readout answers the questions. "plastic_brain" makes the connectome itself the
+    #: chooser and the learner; "prompt_index" is the older frozen-wiring design kept for
+    #: comparison. None leaves the current one alone.
+    kind: str | None = None
 
 
 @app.post("/train")
@@ -772,7 +906,27 @@ def train(req: TrainReq) -> dict:
     Exposed so the UI can offer "watch it learn" and "already trained" as a real choice rather
     than pretending the pretrained model is learning.
     """
-    if req.fresh:
+    if req.kind is not None:
+        if req.kind not in ("plastic_brain", "prompt_index", "policy_adapter"):
+            return {"ok": False, "detail": f"unknown readout kind {req.kind!r}"}
+        STATE["readout_kind"] = req.kind
+        if req.kind == "plastic_brain":
+            # Reset the scales to 1.0 so "from scratch" means from scratch: the anatomical
+            # weights, before any learning.
+            pb = _plastic_brain()
+            pb.r.plastic_scale[:] = 1.0
+            pb.r.apply_plastic()
+            pb.updates = 0
+            pb._m = None
+            pb._v = None
+            pb._t = 0
+            STATE["checkpoint_status"] = "plastic connectome, scales at 1.0"
+            STATE["fresh_brain"] = True
+        else:
+            STATE["adapter"], STATE["readout_kind"] = _fresh_readout()
+            STATE["checkpoint_status"] = "fresh (untrained)"
+            STATE["fresh_brain"] = True
+    elif req.fresh:
         STATE["adapter"], STATE["readout_kind"] = _fresh_readout()
         STATE["checkpoint_status"] = "fresh (untrained)"
         STATE["fresh_brain"] = True
@@ -797,6 +951,7 @@ def train(req: TrainReq) -> dict:
     STATE["window"] = []
     STATE["replay_x"] = []
     STATE["replay_y"] = []
+    STATE["pb_replay"] = []
     STATE["rehearsals"] = 0
     STATE["fly_answered"] = 0
     STATE["fly_correct"] = 0
@@ -810,7 +965,7 @@ def train(req: TrainReq) -> dict:
         "fresh_brain": bool(STATE["fresh_brain"]),
         "checkpoint_status": STATE.get("checkpoint_status"),
         "readout_kind": STATE.get("readout_kind"),
-        "parameters": int(STATE["adapter"].parameters()),
+        "parameters": _active_parameters(),
         "training": bool(STATE.get("training", True)),
         "lr": TRAIN_LR,
         "replay_steps": REPLAY_STEPS,
