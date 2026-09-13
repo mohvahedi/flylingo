@@ -67,11 +67,24 @@ class PlasticBrain:
         max_plastic_edges: int | None = 120_000,
         # Temperature and the read-out step are tuned for the LEARNED read-out, which produces
         # larger logits than the unweighted mean did. At the old temperature of 0.004 the softmax
-        # saturated once the weights grew and the loss ran to 18. Swept over temperature
-        # {0.05, 0.2, 1.0} x lr_w {0.002, 0.01} for 8 epochs each on the real curriculum:
-        #   0.05 / 0.002 -> 74.2%      0.05 / 0.01 -> 46.4%
-        #   0.20 / 0.002 -> 49.5%      0.20 / 0.01 -> 73.2%
-        # 0.05 with 0.002 wins, and 0.01 is too aggressive for the weights at any temperature.
+        # saturated once the weights grew and the loss ran to 18.
+        #
+        # Full sweep over temperature x lr_w, 8 epochs each on the real curriculum (epoch 4 and
+        # epoch 8 accuracy, loss at epoch 8, and the spread of the learned weights):
+        #
+        #   temp   lr_w    ep4     ep8     loss    w_std
+        #   0.05   0.002  58.8%   74.2%   1.1024  0.047   <- best
+        #   0.05   0.010  58.8%   46.4%   1.8406  0.166
+        #   0.20   0.002  49.5%   49.5%   1.1672  0.066
+        #   0.20   0.010  60.8%   73.2%   1.1100  0.224
+        #   1.00   0.002  43.3%   49.5%   1.2891  0.088
+        #   1.00   0.010  49.5%   49.5%   1.1687  0.331
+        #
+        # 0.05 / 0.002 wins. 0.2 / 0.01 is a close second and is slightly ahead at epoch 4, but it
+        # ends lower with a weight spread five times larger -- more extreme weights for the same
+        # accuracy, which is a worse place to be. The choice is not knife-edge: the two best rows
+        # both beat the mean read-out's 63.9% ceiling, so the improvement does not depend on
+        # landing on one exact setting.
         temperature: float = 0.05,
         lr: float = 0.01,
         lr_w: float = 0.002,
