@@ -471,6 +471,12 @@ export function HudApp() {
                     prompt={challenge?.prompt ?? "Loading the lesson…"}
                     options={(challenge?.options ?? []).map((text) => ({ text }))}
                     flyChoice={flyChoice}
+                    /* The fly's own answer count. PhoneStage needs it to give every answer its
+                       own approach: the flight is otherwise triggered only by the chosen card's
+                       position changing, so two answers on the same option left the fly sitting
+                       still with no reach. `answered` is exactly the number of answers the fly
+                       has made. */
+                    answerSeq={answered}
                     userChoice={selected ?? -1}
                     status={status}
                     answerIndex={result?.answer_index ?? -1}

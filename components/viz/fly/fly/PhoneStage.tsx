@@ -205,6 +205,16 @@ export const LAYOUT = {
   /** easing exponent for the flight: 2 eases in and out, which reads as a dart not a slide */
   flyEase: 2.0,
   /**
+   * How far the chosen card may slide under the fly before it counts as a real move rather than the
+   * screen redrawing itself, world units.
+   *
+   * The card rectangles are re-measured from the rendered screen, and the layout shifts by about
+   * 0.36 world units when the answer banner appears. Below this bound the fly is carried with the
+   * card so its reach is not interrupted; above it the change is a genuine layout move and the fly
+   * flies, because teleporting it a couple of units would be worse than replanting its feet.
+   */
+  cardShiftLimit: 0.6,
+  /**
    * The camera has to see an 8.6 unit fly AND an 8.7 unit handset standing side by side, so it is
    * pulled back until the vertical field clears both. At fov 38 and distance 17.6 the vertical
    * field is 2*17.6*tan(19) = 12.1 units against a subject about 9 tall. The old 12.2 put the
@@ -247,6 +257,17 @@ export type PhoneStageProps = {
   stateRms?: number;
   activeFraction?: number;
   reaction?: { kind: ReactionKind; seq: number };
+  /**
+   * Counts answers the fly has made, so every answer gets its own approach of its card.
+   *
+   * Without this the flight below was triggered by the chosen card's world position CHANGING and
+   * by nothing else. Two consecutive answers on the same option produced an identical target, so
+   * no new flight started, `moving` stayed false, the dwell clock kept running from the previous
+   * arrival, the behavior fell through to 'groom', and the fly never put its forelegs on the
+   * answer it had just picked. With four options that is a large fraction of answers, and more
+   * while the model is still near chance and repeats itself.
+   */
+  answerSeq?: number;
   paused?: boolean;
   timeScale?: number;
   /** reported so a caller can verify where the fly was sent */
@@ -419,6 +440,7 @@ function PhoneContactAO({ footprintX, footprintZ }: { footprintX: number; footpr
 function FlyActor({
   rects,
   flyChoice,
+  answerSeq,
   activity,
   stateRms,
   activeFraction,
@@ -431,6 +453,8 @@ function FlyActor({
 }: {
   rects: OptionRect[];
   flyChoice: number;
+  /** how many answers the fly has made, so every answer gets its own approach of its card */
+  answerSeq: number;
   activity?: number[];
   stateRms: number;
   activeFraction: number;
@@ -457,6 +481,10 @@ function FlyActor({
   const lastTarget = useRef(new THREE.Vector3(...LAYOUT.flyStart));
   const flightStart = useRef(0);
   const flightU = useRef(0);
+  /** the last answerSeq seen, so a new answer can be told apart from a new card */
+  const lastAnswerSeq = useRef(-1);
+  /** the last chosen card index, so a drifting card is not mistaken for a new decision */
+  const lastChoice = useRef(flyChoice);
 
   const anim = useAnimator({
     activity: activity ?? null,
@@ -547,11 +575,68 @@ function FlyActor({
     // over 26 seconds to cross the scene and never arrived. Interpolating against the clock
     // takes the same 1.6 seconds on any machine.
     const now = performance.now();
-    if (!lastTarget.current.equals(target.current)) {
-      lastTarget.current.copy(target.current);
-      flightFrom.current.copy(g.position);
-      flightStart.current = now;
+
+    // ---- decide whether this is a NEW approach, or the same card drifting ---------------
+    // Three things can move the target, and only the first two warrant a new flight:
+    //
+    //   1. the fly chose a different card          -> fly there
+    //   2. a new answer came in (answerSeq)        -> approach again, even if it is the same card
+    //   3. the chosen card's measured position moved
+    //
+    // Case 3 is not a decision at all. The card rectangles are re-measured from the rendered
+    // screen, and the layout shifts by about 0.36 world units when the answer banner appears, so
+    // the same card slides under the fly mid-answer. Treating that as a new flight restarted the
+    // reach too, because the reach is keyed on the dwell clock: measured over 90s of the live
+    // demo, 11 of 22 reaches were truncated this way, several lasting under a second against the
+    // 3.5s they are tuned for. That is the fly landing on the answer and then failing to put its
+    // forelegs down on it, which is the entire gesture.
+    //
+    // So now only a new choice or a new answer starts a flight. A card that merely shifts carries
+    // the fly with it: the same delta is applied to the fly, which keeps the distance at zero,
+    // keeps `moving` false and leaves the reach running undisturbed.
+    const newAnswer = answerSeq !== lastAnswerSeq.current;
+    if (newAnswer) lastAnswerSeq.current = answerSeq;
+    const choiceChanged = flyChoice !== lastChoice.current;
+    if (choiceChanged) lastChoice.current = flyChoice;
+
+    const targetChanged = !lastTarget.current.equals(target.current);
+    // the same threshold the arrival test below uses, so "parked" cannot disagree with "moving"
+    const parked = g.position.distanceTo(target.current) <= 0.03;
+    const freshApproach = choiceChanged || (newAnswer && rect && parked);
+
+    let carried = false;
+    if (targetChanged && !freshApproach) {
+      // The same card shifted under the fly. Small shifts are the layout redrawing itself (the
+      // answer banner moving the cards ~0.36 units), and there the fly is carried along: the same
+      // delta is applied to it, which keeps the distance at zero, keeps `moving` false and leaves
+      // the reach running. Carrying a SMALL delta is invisible; applying the same treatment to a
+      // large one would teleport the fly, so anything bigger than CARD_SHIFT_LIMIT is flown
+      // instead, which is also what the eye expects from a genuine layout change.
+      scratch.subVectors(target.current, lastTarget.current);
+      if (scratch.length() <= LAYOUT.cardShiftLimit) {
+        g.position.add(scratch);
+        flightFrom.current.add(scratch);
+        carried = true;
+      }
     }
+    if (!carried && (targetChanged || freshApproach)) {
+      flightFrom.current.copy(g.position);
+      if (!choiceChanged) {
+        // Staying on the same card -- a new answer on it, or an approach forced because the fly
+        // was already parked. There is no travel to do, so back off along the line it approaches
+        // from and settle in again: the motion stays visible instead of the fly appearing to do
+        // nothing, and the re-landing replays the reach.
+        scratch.subVectors(target.current, camera.position);
+        const len = scratch.length() || 1;
+        scratch.multiplyScalar(1 / len);
+        flightFrom.current.addScaledVector(scratch, -REACH.lean);
+        flightFrom.current.y += 0.3;
+      }
+      flightStart.current = now;
+      // what makes the reach play again: it reads the dwell clock, which this resets
+      arrivedAt.current = -1;
+    }
+    if (targetChanged) lastTarget.current.copy(target.current);
     let u = paused
       ? flightU.current
       : Math.min(1, (now - flightStart.current) / (LAYOUT.flySeconds * 1000));
@@ -960,6 +1045,7 @@ export function PhoneStage(props: PhoneStageProps) {
     stateRms = 0,
     activeFraction = 0,
     reaction = { kind: 'none', seq: 0 },
+    answerSeq = 0,
     paused = false,
     timeScale = 1,
     onScreen,
@@ -1136,6 +1222,7 @@ export function PhoneStage(props: PhoneStageProps) {
       <FlyActor
         rects={rects}
         flyChoice={flyChoice}
+        answerSeq={answerSeq}
         activity={activity}
         stateRms={stateRms}
         activeFraction={activeFraction}
