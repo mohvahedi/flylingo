@@ -5,6 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="data:," />
     <title>FlyLingo BrainCloud harness</title>
+    <style>
+      /* The app component sizes itself with height:100%, so the chain from html down has to
+         resolve. Without this the page collapses to zero height in embed mode, where the
+         header, the diagnostics column and the raster footer are all hidden and nothing else
+         is holding the box open. The canvas then falls back to its 300x150 default and the
+         cloud renders into the corner of a blank page. */
+      html,
+      body,
+      #root {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #080c11;
+      }
+    </style>
+    <script>
+      // The neuron binaries live in public/data, which is served beside this page. This harness
+      // is mounted at a subpath in the deployment (a Worker at /brain/), and the component's
+      // own default is the absolute /data/ so that it also works on a nested app route like
+      // /lesson/fly/brain. Without this override the fetch 404s there and the view quietly
+      // falls back to procedural coordinates while the page still calls them anatomical.
+      window.__FLYLINGO_DATA_BASE__ = new URL('data/', window.location.href).toString();
+    </script>
   </head>
   <body>
     <div id="root"></div>

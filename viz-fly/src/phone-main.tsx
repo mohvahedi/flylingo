@@ -37,6 +37,14 @@ const QUESTIONS: { prompt: string; options: string[]; answer: number }[] = [
   },
 ];
 
+/**
+ * Presentation mode, set by ?embed=1 when this page is shown inside another page.
+ *
+ * The controls exist to drive the scene at exact states while judging the composition, which
+ * is not what a viewer of the embed wants to see. With them hidden the scene drives itself.
+ */
+const EMBED = new URLSearchParams(window.location.search).get('embed') === '1';
+
 function Viewer() {
   const [qi, setQi] = useState(0);
   const [flyChoice, setFlyChoice] = useState(1);
@@ -67,6 +75,29 @@ function Viewer() {
     const f = syntheticFrame(t);
     setActivity(f.state);
   }, [t]);
+
+  /**
+   * Embed mode, for showing this scene on a page with nobody to click the controls.
+   *
+   * The fly picks the correct answer, the result resolves, then the next question loads. The
+   * beats match the recorded clip served beside it: 3s to land and register, 6.2s per question.
+   */
+  useEffect(() => {
+    if (!EMBED) return;
+    const q = QUESTIONS[qi];
+    setFlyChoice(q.answer);
+    setUserChoice(-1);
+    setStatus('none');
+    const resolve = window.setTimeout(() => {
+      setStatus('correct');
+      setUserChoice(q.answer);
+    }, 3000);
+    const advance = window.setTimeout(() => setQi((v) => (v + 1) % QUESTIONS.length), 6200);
+    return () => {
+      window.clearTimeout(resolve);
+      window.clearTimeout(advance);
+    };
+  }, [qi]);
 
   const q = QUESTIONS[qi];
   // memoised: an inline .map() would hand the scene a new array every render
@@ -110,6 +141,7 @@ function Viewer() {
         activeFraction={0.02}
         onScreen={({ rects: r }) => setRects(r)}
       />
+      {!EMBED && (
       <div
         style={{
           position: 'absolute',
@@ -152,6 +184,7 @@ function Viewer() {
           {rects[flyChoice] ? `${Math.round(rects[flyChoice].cx)},${Math.round(rects[flyChoice].cy)}` : ', '}
         </div>
       </div>
+      )}
     </div>
   );
 }

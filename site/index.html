@@ -57,7 +57,7 @@
   a:hover { border-bottom-color: var(--cyan); }
   code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88em; }
   code { background: #1a1e24; padding: 2px 6px; border-radius: 4px; color: var(--amber); }
-  .grid2 { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .grid2 { display: grid; gap: 22px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
   .card {
     background: var(--panel);
     border: 1px solid var(--line);
@@ -72,7 +72,20 @@
     text-transform: uppercase;
     color: var(--dim);
   }
-  .card iframe { display: block; width: 100%; height: 520px; border: 0; background: #05060a; }
+  .card iframe { display: block; width: 100%; border: 0; background: #05060a; }
+  /* The demos are stacked full width, not paired side by side. Both scenes are composed for
+     16:9 (the recording is 1920x1080), and in a half width box they crop badly: the fly ends
+     up cut off at the top and left, and the neuron cloud sits in the middle of dead space. */
+  .shots { display: grid; gap: 26px; grid-template-columns: 1fr; }
+  .shots .card iframe { aspect-ratio: 16 / 9; height: auto; }
+  figure.card { margin: 0; }
+  figure.card figcaption {
+    padding: 14px 16px 16px;
+    border-top: 1px solid var(--line);
+    color: var(--dim);
+    font-size: 0.88rem;
+    line-height: 1.5;
+  }
   table { width: 100%; border-collapse: collapse; margin: 8px 0 18px; font-size: 0.95rem; }
   th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); }
   th { color: var(--dim); font-weight: 500; font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -191,21 +204,27 @@
   <div class="wrap">
     <h2>Watch it run</h2>
     <p>
-      Both views below are live in your browser. They run on synthetic drive at the measured
-      magnitudes, because the brain service that steps the real connectome is a Python process and
-      cannot be hosted here. The full local setup runs the real thing.
+      Both views below are live in your browser, and both drive themselves. They run on synthetic
+      drive at the measured magnitudes, because the brain service that steps the real connectome is
+      a Python process and cannot be hosted here. The full local setup runs the real thing.
     </p>
-    <div class="grid2">
-      <div class="card">
-        <div class="head">the fly and the phone it plays on</div>
-        <iframe src="./fly/" title="FlyLingo fly harness" loading="lazy"></iframe>
-      </div>
-      <div class="card">
-        <div class="head">166,700 neurons, real soma positions</div>
-        <iframe src="./brain/" title="FlyLingo neuron cloud" loading="lazy"></iframe>
-      </div>
+    <div class="shots">
+      <figure class="card">
+        <iframe src="./fly/phone.html?embed=1" title="The fly answering questions on the phone" loading="lazy"></iframe>
+        <figcaption>
+          The fly reads the question, picks a card, flies to the one it chose and plants its
+          forelegs on it. Four questions loop.
+        </figcaption>
+      </figure>
+      <figure class="card">
+        <iframe src="./brain/?embed=1" title="166,700 neuron point cloud at measured soma positions" loading="lazy"></iframe>
+        <figcaption>
+          All 166,700 neurons at their measured positions. Cyan is a soma. Amber is a neuron firing
+          in the current frame.
+        </figcaption>
+      </figure>
     </div>
-    <p class="muted" style="margin-top:18px">
+    <p class="muted" style="margin-top:20px">
       139,668 of the 166,700 points are measured soma positions from the annotations. The rest are
       filled from a group centroid, and the view says so rather than implying every point is measured.
     </p>

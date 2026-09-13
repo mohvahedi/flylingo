@@ -103,6 +103,15 @@ export function App() {
    * requirement can be checked in a real browser instead of argued from code.
    */
   const [zeroProps] = useState(() => new URLSearchParams(window.location.search).get('props') === 'none');
+  /**
+   * Presentation mode, for embedding this view in a page that is not the harness.
+   *
+   * Drops the header, the diagnostics column and the provenance overlay, and asks the cloud
+   * for its compact caption. None of that is a measurement anyone reading the embed needs,
+   * and stacked over the cloud it makes the anatomy unreadable. The harness at the plain URL
+   * is unchanged, which is where the numbers are read from.
+   */
+  const [embed] = useState(() => new URLSearchParams(window.location.search).get('embed') === '1');
   const [streamUrl] = useState(() => {
     const raw = new URLSearchParams(window.location.search).get('stream');
     if (raw === null || raw === 'off' || raw === 'on') return DEFAULT_STREAM_URL;
@@ -184,6 +193,7 @@ export function App() {
         background: '#080c11',
       }}
     >
+      {!embed && (
       <header
         style={{
           display: 'flex',
@@ -217,11 +227,12 @@ export function App() {
         </div>
         <FpsReadout windowFrames={60} />
       </header>
+      )}
 
       <main style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <section style={{ position: 'relative', flex: 1, minWidth: 0 }} data-testid="cloud-section">
           {zeroProps ? (
-            <BrainCloud />
+            <BrainCloud caption={embed ? 'compact' : 'full'} />
           ) : (
             <BrainCloud
               layout={layoutState.layout}
@@ -232,9 +243,11 @@ export function App() {
               stateRms={frame.stateRms}
               driveMode={driveMode}
               inspectId={inspectId}
+              caption={embed ? 'compact' : 'full'}
             />
           )}
 
+          {!embed && (
           <div
             style={{
               position: 'absolute',
@@ -257,9 +270,11 @@ export function App() {
               {anatomical ? provenance.detail : `${layoutState.reason}; ${provenance.detail}`}
             </div>
           </div>
+          )}
 
         </section>
 
+        {!embed && (
         <aside
           style={{
             width: '310px',
@@ -360,8 +375,10 @@ export function App() {
 
           <MetricsPanel />
         </aside>
+        )}
       </main>
 
+      {!embed && (
       <footer style={{ borderTop: '1px solid rgba(120,160,200,0.18)', padding: '0.5rem 0.9rem 0.7rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#7f98ad', marginBottom: '0.3rem' }}>
           <span>
@@ -372,6 +389,7 @@ export function App() {
         </div>
         <RasterStrip history={history} height={200} />
       </footer>
+      )}
     </div>
   );
 }
