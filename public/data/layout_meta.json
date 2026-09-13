@@ -1,0 +1,60 @@
+{
+  "dataset": "MaleCNS v1.0",
+  "count": 166700,
+  "edges": 25582938,
+  "coordinateSource": "real soma voxel coordinates",
+  "coordinateNote": "measured soma voxel coordinates from MaleCNS annotations.feather (somaLocation), centred and uniformly scaled to world units",
+  "coordinateField": "somaLocation",
+  "accuracy": {
+    "neuronsWithSomaAnnotation": 139662,
+    "neuronsFilledFromGroupCentroid": 27038,
+    "matchingRule": "centroid of (class, in-degree decile) group",
+    "distinctCoordinates": 139668
+  },
+  "degreeSource": "malecns in-degree from CSR indptr diff (row = postsynaptic)",
+  "classSource": "malecns superclass, collapsed into 4 layout classes",
+  "classTable": [
+    "optic_lobe",
+    "central_brain",
+    "ascending_descending",
+    "other"
+  ],
+  "rawCentre": [
+    48068.0,
+    36877.0,
+    72342.5
+  ],
+  "uniformScale": 1.608014343487944e-05,
+  "sources": {
+    "ids_npy": "ab90597b7b0ce07cbc22cb39a65b70bea2ac73cc7fd225951bd9d73f2fc8dd3f",
+    "indptr_npy": "2efdd6bcfd538d4a58ff381246075f6d1315417c54c38f39a75ad4386f4b689c",
+    "annotations_feather": "2177e246113e4cfbf1e7772ec37c6da1955ff22e8063d0b1f833101f99a9a3b2"
+  },
+  "files": {
+    "soma_positions.f32": {
+      "dtype": "float32",
+      "shape": [
+        166700,
+        3
+      ]
+    },
+    "in_degree.u32": {
+      "dtype": "uint32",
+      "shape": [
+        166700
+      ]
+    },
+    "class_index.u8": {
+      "dtype": "uint8",
+      "shape": [
+        166700
+      ]
+    },
+    "neuron_ids.u32": {
+      "dtype": "uint32",
+      "shape": [
+        166700
+      ]
+    }
+  }
+}
