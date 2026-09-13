@@ -1,0 +1,19 @@
+fly.glb
+
+title:   Fly
+author:  victorberdugo1 (https://sketchfab.com/victorberdugo1)
+source:  https://sketchfab.com/3d-models/fly-6a4470f884554864827d848718b2b6bc
+license: CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/)
+tool:    Sketchfab 16.7.0 export, glTF 2.0
+
+This model is used under CC-BY-4.0, which requires attribution wherever it is
+displayed. The FlyLingo HUD carries the credit next to the specimen panel; do not
+remove it without also removing the model.
+
+The mesh is static: 57 meshes, 6511 vertices, 7 materials, 9 embedded textures, no
+skin and no baked animation. It is animated procedurally by driving its named nodes:
+  4 wing nodes  (FLYALI0, FLYALI, FLYALA0, FLYALA)
+  48 leg nodes  (FLYPAT33..FLYPAT40 and siblings, 6 legs of multiple segments each)
+  2 eye nodes   (FLYOJO, FLYOJO0)
+  1 head        (FLYCUL)
+  1 body root   (FLYMAIN)

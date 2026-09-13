@@ -1,0 +1,15 @@
+smartphone_with_green_screen.glb
+--------------------------------
+Title:   "smartphone with green screen"
+Author:  peroroo  (https://sketchfab.com/peroroo)
+Source:  https://sketchfab.com/3d-models/smartphone-with-green-screen-2c0b4558cd0d486e81583dd9921968c7
+Licence: CC-BY-SA-4.0  (http://creativecommons.org/licenses/by-sa/4.0/)
+
+This asset is used unmodified as the handset in the hero scene. The green screen mesh inside
+it is hidden at runtime and a separate plane carries the live Duolingo texture; the geometry
+itself is not altered.
+
+IMPORTANT, SHARE-ALIKE: CC-BY-SA-4.0 requires that adaptations of this material be released
+under the same licence. Attribution to peroroo is required wherever it is displayed, and has
+been added to the HUD footer. If the handset is removed from the project, this credit must be
+removed with it.
