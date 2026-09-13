@@ -28,6 +28,7 @@ Usage:  python step2_measure.py [epochs] [seeds] [tail]
 from __future__ import annotations
 
 import json
+import os
 import statistics
 import sys
 import time
@@ -36,22 +37,26 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path("/content/flylingo")
-RUNS = ROOT / "runs" / "plastic_brain"
+# One file, both layouts. ROOT is the directory that contains the `brain` package (and
+# brain/curriculum); GRAPH is the built connectome's directory, which is NOT under ROOT locally.
+# The identical script therefore runs on Colab and on this machine.
+ROOT = Path(os.environ.get("FLYLINGO_ROOT", "/content/flylingo"))
+GRAPH = Path(os.environ.get("FLYLINGO_GRAPH", str(ROOT / "cache" / "malecns_v1")))
+RUNS = Path(os.environ.get("FLYLINGO_RUNS", str(ROOT / "runs" / "plastic_brain")))
+USE_GPU = os.environ.get("FLYLINGO_GPU", "1") not in ("0", "false", "no")
 RUNS.mkdir(parents=True, exist_ok=True)
 
 EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 40
 SEEDS = int(sys.argv[2]) if len(sys.argv) > 2 else 5
 TAIL = int(sys.argv[3]) if len(sys.argv) > 3 else 10
 MODES = ("intact", "shuffled", "random_graph", "no_edges")
-USE_GPU = True
 
 sys.path.insert(0, str(ROOT))
 from brain.encoders import encode_text  # noqa: E402
 from brain.plastic_brain import PlasticBrain  # noqa: E402
 from brain.reservoir import FlyReservoir, load_connectome  # noqa: E402
 
-cur = json.load(open(ROOT / "brain/curriculum/es-en.json", encoding="utf-8"))
+cur = json.load(open(ROOT / "brain" / "curriculum" / "es-en.json", encoding="utf-8"))
 items = [
     (c["prompt"], int(c["correctIndex"]))
     for u in cur["units"]
@@ -68,7 +73,7 @@ print(f"memorisation of a phrase-to-answer mapping, not language.", flush=True)
 print(f"majority-class baseline {chance:.1%}   uniform chance 25.0%", flush=True)
 print(f"epochs {EPOCHS}   seeds {SEEDS}   score = mean of last {TAIL} epochs", flush=True)
 
-connectome = load_connectome(str(ROOT / "cache" / "malecns_v1"))
+connectome = load_connectome(str(GRAPH))
 print(f"connectome: {connectome.neurons} neurons, {connectome.edges} directed edges",
       flush=True)
 
@@ -209,8 +214,14 @@ else:
     print("  Replicate before calling it a property of the fly.", flush=True)
 
 report = {
-    "config": {"epochs": EPOCHS, "seeds": SEEDS, "tail": TAIL, "device": "GPU (colab)",
-               "steps": 6, "pool_size": 200, "n_pools": 4},
+    "config": {
+        "epochs": EPOCHS, "seeds": SEEDS, "tail": TAIL,
+        # Derived, not asserted. This was a hardcoded string and the first CPU run wrote
+        # "GPU (colab)" into its own artifact, which is the mislabelled-provenance failure the
+        # project has had to fix before: a number whose recorded origin is wrong.
+        "device": "GPU" if USE_GPU else "CPU",
+        "steps": 6, "pool_size": 200, "n_pools": 4,
+    },
     "per_seed": {str(k): v for k, v in per_seed.items()},
     "summary": summary,
     "gap": {"vs_best_control_mean": gm, "vs_best_control_sd": gsd,
@@ -223,9 +234,11 @@ out = RUNS / "colab_measure.json"
 out.write_text(json.dumps(report, indent=2), encoding="utf-8")
 print(f"\nwrote {out}", flush=True)
 
-zip_path = ROOT / "colab_results.zip"
+zip_path = RUNS / "colab_results.zip"
 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
     for f in sorted(RUNS.glob("colab_*")):
         z.write(f, f.name)
-    z.write(ROOT / "cache" / "step1_report.json", "step1_report.json")
+    report = GRAPH.parent / "step1_report.json"
+    if report.exists():
+        z.write(report, "step1_report.json")
 print(f"wrote {zip_path} ({zip_path.stat().st_size / 1e6:.1f} MB)", flush=True)
