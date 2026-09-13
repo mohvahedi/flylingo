@@ -29,6 +29,13 @@ FILES = {
 OUT = FLY / "colab" / "FlyLingo.ipynb"
 
 
+def _cid(n: int) -> str:
+    """A stable per-cell id. nbformat 4.5 requires one on every cell, and nbconvert warns without
+    it while a stricter consumer may reject the file outright, so it is set explicitly rather than
+    left for whatever validates it next."""
+    return f"flylingo-{n:02d}"
+
+
 def code(source: str) -> dict:
     return {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
             "source": source.strip("\n").splitlines(keepends=True)}
@@ -272,6 +279,12 @@ retention rule and row normalisation described above. Check its own license befo
 the data; this notebook only downloads it at runtime.
 """),
     ]
+
+    # nbformat 4.5 requires an id on every cell. Assigned by position here rather than threaded
+    # through every call site: nbconvert warns without it and a stricter consumer may reject the
+    # notebook outright, which matters because this file's whole purpose is to be opened elsewhere.
+    for i, c in enumerate(cells):
+        c["id"] = _cid(i)
 
     nb = {
         "cells": cells,
