@@ -8,6 +8,10 @@ The thing choosing the answers is the **MaleCNS v1.0** reconstruction from the F
 
 It does not, or at least the specific wiring does not. That is the finding, and it took three attempts to get there honestly.
 
+![The fly choosing answers in the lesson](site/media/flylingo-answer.gif)
+
+The fly picks the answer, flies to the card it chose, and plants its forelegs on it. Nine seconds of the clip above, looping. The full recording is [45 seconds of the demo answering questions](site/media/flylingo-45s.mp4), and it is the same build the site serves.
+
 ## The question
 
 Feed a fixed recurrent network a prompt, watch it settle, and read the answer off its state. That much is standard reservoir computing, and it would work with almost any recurrent graph. So the interesting question is not whether it works. It is whether **this** graph, a real one measured synapse by synapse from an actual fly, beats a graph of the same size that is not the fly's.
