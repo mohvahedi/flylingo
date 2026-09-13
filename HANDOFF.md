@@ -70,7 +70,9 @@ to a dashboard.
 
 **The honest framing, which is a project standard and has been fought over more than once:**
 
-- The fly **processes** (real connectome stepped at 20 Hz), **picks** (softmax over four pools of
+- The fly **processes** (real connectome stepped at 10 Hz — `TICK_HZ`, continuously between
+  answers; the spike *stream* is a separate 20 Hz websocket, `STREAM_HZ`. This line previously said
+  20 Hz for both and conflated the two), **picks** (softmax over four pools of
   real neurons → the fly flies to that card), and a **trainable component learns**.
 - What is NOT true in the frozen configuration: the connectome's own weights never change, and a
   raw encoding with no brain in it scores the same. Do not let a demo imply otherwise.
