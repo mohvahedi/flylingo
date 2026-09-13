@@ -138,8 +138,8 @@ def test_a_different_pool_seed_is_refused(connectome, tmp_path):
 def test_a_tampered_pool_layout_is_refused(connectome, tmp_path):
     """The pool-layout guard on its own, with the edge count matching so it is the one that fires.
 
-    Storing only the weights would load them onto the wrong neurons — the assignment is a seeded
-    shuffle of neuron ids and is not recomputable from the scales — so this path must be caught
+    Storing only the weights would load them onto the wrong neurons, the assignment is a seeded
+    shuffle of neuron ids and is not recomputable from the scales, so this path must be caught
     even when everything else lines up.
     """
     pb = _fresh(connectome)

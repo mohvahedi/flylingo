@@ -2,7 +2,7 @@
 
 ## Short answer
 
-**No — and this time the answer is supported by the noise, not just a point estimate.** A
+**No, and this time the answer is supported by the noise, not just a point estimate.** A
 recurrent graph is required; which graph it is cannot be detected on this task.
 
 Two claims, kept separate because they have different evidence:
@@ -29,8 +29,8 @@ comparison run through an inadequate read-out measures the read-out.**
 
 ### False finding 2: "the wiring matters" again (single epoch)
 
-After fixing the read-out, a 15-epoch run produced intact 83.5% against shuffled 74.2% — a 9.3
-point spread — and the script printed *"The intact connectome finished clear of both controls.
+After fixing the read-out, a 15-epoch run produced intact 83.5% against shuffled 74.2%, a 9.3
+point spread, and the script printed *"The intact connectome finished clear of both controls.
 The wiring matters here."*
 
 That reading is **one epoch out of a noisy series, and it was the lucky end of it.** From the same
@@ -47,7 +47,7 @@ run's own per-epoch record:
 Stopping at epoch 15 would have claimed a wiring advantage. Stopping at 10, 20, 30 or 60 would
 not. The verdict was decided by where the loop stopped, not by the wiring.
 
-Single-epoch accuracy swings by **7–8.5 points** (sd) within one arm, with a spread of up to 36
+Single-epoch accuracy swings by **7 to 8.5 points** (sd) within one arm, with a spread of up to 36
 points between the best and worst epoch. Any conclusion drawn from one final epoch is a draw from
 that distribution.
 

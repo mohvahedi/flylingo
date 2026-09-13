@@ -533,7 +533,7 @@ function FlyActor({
   /**
    * Dev only: hands the page the very object the pose reads, so the reach can be swept from
    * the browser while tools/reach_measure.py watches the tarsi. That is how its numbers were
-   * chosen — measured, not guessed. In a build this branch is compiled out.
+   * chosen, measured, not guessed. In a build this branch is compiled out.
    */
   useEffect(() => {
     if (!import.meta.env.DEV) return;

@@ -1,5 +1,11 @@
 # Large build inputs and derived data: reproducible from build_graph_from_reference.py
 cache/
+
+# The reference implementation, kept read-only for comparison. It is someone else's project
+# (github.com/nftechie/flm, MIT, Alex Wormuth), not part of this one, so it is never published.
+# The README credits it instead.
+flm/
+
 # Dependencies and build output
 node_modules/
 dist/
@@ -7,12 +13,28 @@ dist/
 __pycache__/
 *.pyc
 .pytest_cache/
+
 # Local runtime state, checkpoints and logs
 brain/runs/**/_smoke.json
-# Run artifacts of the four-arm experiment and the demo's own trained brain. \`brain/runs\` is
-# mixed on purpose: curriculum/ and promptindex/ hold the SHIPPED checkpoints the API loads and
-# ARE tracked, so this names the experiment directory rather than ignoring brain/runs wholesale.
-# of checkpoints into a published tree. of checkpoints into a published tree.
+
+# Run artifacts of the four-arm experiment, and the demo's own trained brain.
+#
+# brain/runs is mixed on purpose: curriculum/ and promptindex/ hold the SHIPPED checkpoints the
+# API loads and ARE tracked, so this names the experiment directory rather than ignoring
+# brain/runs wholesale. Without it, a `git add -A` sweeps roughly 10 MB of checkpoints into the
+# published tree.
 brain/runs/plastic_brain/
+
 artifacts/
 *_real_run.log
+
+# Built site bundles. These are regenerated from viz-fly/ and viz-brain/ by their own build
+# commands and redeployed, so tracking them would only add a new hashed bundle per rebuild.
+# The landing page, the notebook, the clip and the Worker config ARE tracked.
+site/fly/
+site/brain/
+
+# Secrets. duolingo-clone/.env.local holds real Clerk, Postgres and Stripe values.
+.env
+.env.local
+*.pem

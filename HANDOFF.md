@@ -1,11 +1,11 @@
-# FlyLingo — session handoff
+# FlyLingo, session handoff
 
 Written 2026-09-13, end of a very long session. Read this first; it is the state of the world, not
 a plan of record. Everything below was verified at the time of writing.
 
 ---
 
-## 0. THE ANSWER — the wiring does not matter (2026-09-13, attempt 5)
+## 0. THE ANSWER, the wiring does not matter (2026-09-13, attempt 5)
 
 The four-arm comparison finally ran on a **verified** accelerated path. Two machines, two budgets,
 same conclusion.
@@ -14,10 +14,10 @@ same conclusion.
 
 | arm | mean | sd | intact − this arm | sd of that gap |
 |---|---|---|---|---|
-| **intact** (real connectome) | **87.7%** | 1.8% | — | — |
+| **intact** (real connectome) | **87.7%** | 1.8% |, |, |
 | shuffled | 88.2% | 2.3% | **−0.5%** | 2.1% |
 | random_graph | 87.0% | 1.9% | **+0.7%** | 1.7% |
-| no_edges | 21.6% | 0.0% | — | — |
+| no_edges | 21.6% | 0.0% |, |, |
 
 ```
 paired per seed:
@@ -34,14 +34,14 @@ intact leads the best control on 0/5 seeds.
 shuffled 62.8%, random_graph 64.3%, no_edges 21.6%; intact leads on 1/3 seeds. Same tie.
 
 **Read it correctly.** Against each control *separately*, the real connectome is inside the noise:
-−0.5% against the shuffle and +0.7% against the random graph, each against a spread of 1.7–2.1
+−0.5% against the shuffle and +0.7% against the random graph, each against a spread of 1.7 to 2.1
 points. The "−1.4% versus the best control" in the headline is **not** a finding either, and it is
 partly an artifact of the comparison itself: `best control` is a `max()` over two noisy arms, which
 biases the denominator upward. Do not report it as "the real wiring is worse".
 
-**What IS established:** a recurrent graph is **required**. The edge-free control sits at 21.6% — the
-majority-class baseline is 26.8% and uniform chance is 25.0% — while every connected arm reaches
-63–88%. Disconnecting the brain destroys the behaviour; which connected graph you use does not
+**What IS established:** a recurrent graph is **required**. The edge-free control sits at 21.6%, the
+majority-class baseline is 26.8% and uniform chance is 25.0%, while every connected arm reaches
+63 to 88%. Disconnecting the brain destroys the behaviour; which connected graph you use does not
 measurably matter.
 
 **Verified, not asserted.** All 20 Colab checkpoints were re-loaded on this machine (a different
@@ -53,15 +53,15 @@ accelerator was corrupting the weights until §3; with both fixed, the answer is
 epoch table in §7 and the retracted claims in §3 were all pointing at this.
 
 **What is still not claimed:** anything about *why* the wiring does not matter, and anything about
-language. This remains memorisation of a 97-item phrase-to-answer mapping — every phrase is shown
-every epoch — and that caveat belongs wherever the number is shown.
+language. This remains memorisation of a 97-item phrase-to-answer mapping, every phrase is shown
+every epoch, and that caveat belongs wherever the number is shown.
 
 ---
 
 ## 1. What this project is
 
-A fruit-fly brain — the real Janelia/Google **MaleCNS v1.0** connectome, 166,700 neurons and
-25,582,938 directed edges — shown learning Spanish, framed as a Duolingo-style lesson. A 3D fly
+A fruit-fly brain, the real Janelia/Google **MaleCNS v1.0** connectome, 166,700 neurons and
+25,582,938 directed edges, shown learning Spanish, framed as a Duolingo-style lesson. A 3D fly
 sits beside a phone whose screen renders real Duolingo; the fly's own sampled action picks the
 answer and its forelegs tap the chosen card. The connectome is stepped live and its spikes stream
 to a dashboard.
@@ -70,7 +70,7 @@ to a dashboard.
 
 **The honest framing, which is a project standard and has been fought over more than once:**
 
-- The fly **processes** (real connectome stepped at 10 Hz — `TICK_HZ`, continuously between
+- The fly **processes** (real connectome stepped at 10 Hz, `TICK_HZ`, continuously between
   answers; the spike *stream* is a separate 20 Hz websocket, `STREAM_HZ`. This line previously said
   20 Hz for both and conflated the two), **picks** (softmax over four pools of
   real neurons → the fly flies to that card), and a **trainable component learns**.
@@ -89,14 +89,14 @@ to a dashboard.
 
 | surface | status |
 |---|---|
-| http://127.0.0.1:3300/fly | **200** — flagship HUD, plays itself |
-| http://127.0.0.1:3300/lesson/fly | 200 — phone-in-front-of-fly lesson |
-| http://127.0.0.1:3300/lesson/fly/brain | 200 — neuron view, spikes streaming |
+| http://127.0.0.1:3300/fly | **200**, flagship HUD, plays itself |
+| http://127.0.0.1:3300/lesson/fly | 200, phone-in-front-of-fly lesson |
+| http://127.0.0.1:3300/lesson/fly/brain | 200, neuron view, spikes streaming |
 | http://127.0.0.1:3300 | 307 → redirects to `/fly` |
-| http://127.0.0.1:8770/health | **200** — brain service |
+| http://127.0.0.1:8770/health | **200**, brain service |
 
 Brain health right now: `readout_kind: plastic_brain`, `checkpoint_status: "plastic connectome,
-scales at 1.0"` — i.e. **fresh, untrained**. Its brain runs on the **CPU** (the GPU path is only
+scales at 1.0"`, i.e. **fresh, untrained**. Its brain runs on the **CPU** (the GPU path is only
 wired into the experiment scripts).
 
 App is started with `bun run start --port 3300` in `duolingo-clone`; brain with
@@ -125,16 +125,16 @@ Nested repo (`duolingo-clone/`): `5b0debc`, `d2cf020`, `2eeba12`, `5f2622f`.
 
 ### Uncommitted / untracked
 
-- `brain/runs/plastic_brain/` — **6 arm checkpoints** (`.npz`) plus `convergence.json`,
+- `brain/runs/plastic_brain/`, **6 arm checkpoints** (`.npz`) plus `convergence.json`,
   `convergence-mean.json`, `measure.json`, `measure_seeds.json`. Deliberately not committed.
-- `brain/scripts/diagnose_random_graph_reload.py` — untracked, **new, just written**
-- `brain/scripts/diagnose_trained_sensitivity.py` — untracked, **new, was interrupted mid-run**
-- `tools/record_demo.py`, `viz-fly/tools/reach_sweep.{py,json,log}` — untracked odds and ends
+- `brain/scripts/diagnose_random_graph_reload.py`, untracked, **new, just written**
+- `brain/scripts/diagnose_trained_sensitivity.py`, untracked, **new, was interrupted mid-run**
+- `tools/record_demo.py`, `viz-fly/tools/reach_sweep.{py,json,log}`, untracked odds and ends
 - `duolingo-clone` shows modified content (its own commits above are made separately)
 
 ---
 
-## 3. THE OPEN PROBLEM — RESOLVED 2026-09-13 (attempt 5)
+## 3. THE OPEN PROBLEM, RESOLVED 2026-09-13 (attempt 5)
 
 **It was (a) A BUG, in the accelerated path, and it is fixed and pinned by a test.**
 
@@ -152,8 +152,8 @@ One commit-summary line, then the history below is kept because the reasoning st
 | step | script | what it settled |
 |---|---|---|
 | 1 | `diagnose_trained_sensitivity.py` | CPU→CPU reload exact; perturbing every trained weight by 1e-4 moves accuracy by **0.0 points**; relative top-2 margin 1.19 with 1% of prompts near a tie. **Trained system is not ill-conditioned, so this is not sensitivity → (a).** |
-| 2 | `diagnose_gpu_stepwise.py` | First probe said all modes agreed — but it **re-implemented** the recurrence, so it tested a reading of the code, not the code. Kept only as a record of that mistake. |
-| 3 | `diagnose_gpu_divergence.py` | Using the **shipped** `settle`, the mirror's stored-entry count came back **25,551,707 against the CPU's 25,582,938** — a shape error that named the mechanism. |
+| 2 | `diagnose_gpu_stepwise.py` | First probe said all modes agreed, but it **re-implemented** the recurrence, so it tested a reading of the code, not the code. Kept only as a record of that mistake. |
+| 3 | `diagnose_gpu_divergence.py` | Using the **shipped** `settle`, the mirror's stored-entry count came back **25,551,707 against the CPU's 25,582,938**, a shape error that named the mechanism. |
 | 4 | `confirm_gpu_mirror_layout.py`, `probe_mirror_layout.py`, `instrument_mirror_stages.py`, `instrument_mirror_calls.py` | Localised it: the control matrix has **31,231 duplicate pairs**, the connectome has **0**, the constructor preserves the count, and the change happens on the **first matvec**. |
 | 5 | `prove_matvec_reindex.py` | One matvec: 25,582,938 → 25,551,707, short by exactly 31,231, **product unchanged** (5.4e-07). With `has_canonical_format = True`: **layout preserved, indptr matches, same product.** |
 
@@ -161,13 +161,13 @@ Three hypotheses were tested and **refuted** before the real one: the cupyx cons
 preserving the count, `.tocsr()` returning a new object, and `mirror.data[idx] = …`
 canonicalising. Each was a plausible story that a measurement killed.
 
-**Why the existing tests could not catch it** — both gaps are now closed:
+**Why the existing tests could not catch it**, both gaps are now closed:
 
 - `test_gpu_matvec_matches_cpu` runs **no plasticity at all**.
 - `test_gpu_plasticity_matches_cpu` ran **only the default mode**, whose matrix has zero
   duplicate pairs and therefore nothing to collapse. It now loops every mode and additionally
   checks the mirror carries its own device's weights at the plastic positions, exactly.
-- New: `test_gpu_mirror_keeps_the_cpu_layout_per_mode` — asserts entry count, index pointers and
+- New: `test_gpu_mirror_keeps_the_cpu_layout_per_mode`, asserts entry count, index pointers and
   data per mode, after a settle. **Proven red on the old code** (reverting the one line reproduces
   `25551707 == 25582938` naming `random_graph`) and green with the fix.
 
@@ -200,14 +200,14 @@ tolerance. 159 tests pass.
 - The wiring comparison: **still not answered.** The bug was one reason it kept failing; the other
   reasons (attempts 1-3) were separate and also real. The four-arm run needs re-running on the
   fixed path before anything is claimed.
-- Replicated: the divergence is device-independent — a local 3070 Ti and a Colab T4 both showed
+- Replicated: the divergence is device-independent, a local 3070 Ti and a Colab T4 both showed
   it, with the same per-mode ordering.
 
 **What is still owed:** the four-arm measurement on the fixed path (`colab/step2_measure.py`,
 multi-seed, paired, saves checkpoints and recomputes every reported number from them). Its Colab
 blocker is recorded in §4.
 
-### The history — attempts 1 to 4
+### The history, attempts 1 to 4
 
 **The measurement was broken and I did not trust any GPU number.**
 
@@ -241,12 +241,12 @@ ceiling and the 26× speedup, comes from that path and is therefore suspect.**
 
 Two candidate explanations, and they need different remedies:
 
-- **(a) A BUG** — the GPU path computes something different, so it must be fixed before use.
-- **(b) SENSITIVITY** — the trained recurrence amplifies a float32 difference of order 1e-7 across
+- **(a) A BUG**, the GPU path computes something different, so it must be fixed before use.
+- **(b) SENSITIVITY**, the trained recurrence amplifies a float32 difference of order 1e-7 across
   six recurrent steps, so each device is internally consistent but the two cannot be compared on
   trained weights. Nothing is wrong with either path.
 
-### The very next step — DONE, see the resolution at the top of §3
+### The very next step, DONE, see the resolution at the top of §3
 
 `brain/scripts/diagnose_trained_sensitivity.py` ran and answered its three questions: reload is
 exact, a 1e-4 perturbation moves accuracy by zero, and decisions are not near ties. That ruled out
@@ -284,7 +284,7 @@ VM needs no clone, and `tools/colab_mcp_bridge.py` drives googlecolab/colab-mcp 
   1. Open Colab, use *Manage sessions*, and terminate the T4 runtime by hand, then re-run
      `colab new -s fly --gpu T4`.
   2. Let it time out (the VM is idle, and an unused assignment is reclaimed) and retry later.
-  3. Run `colab/step2_measure.py` on any other GPU machine — it needs only a GPU and network, and
+  3. Run `colab/step2_measure.py` on any other GPU machine, it needs only a GPU and network, and
      it rebuilds the connectome itself.
 
 Note the account is `vmoh80s@gmail.com` and the token lives at `~/.config/colab-cli/token.json`
@@ -292,17 +292,17 @@ Note the account is `vmoh80s@gmail.com` and the token lives at `~/.config/colab-
 
 ---
 
-## 4. Things asked for — status
+## 4. Things asked for, status
 
 - **"Fresh or pretrained?" for the demo. DONE.** Wired, with a third state. The brain checkpoints
   every 100 plasticity updates and on shutdown; a restart resumes and `checkpoint_status` says which
   of `resumed` / `scales at 1.0` / `refused` is live. `/train {"kind": "plastic_brain", "fresh":
   false}` resumes, `fresh: true` resets. Verified across two real processes with a hard kill between
-  (`brain/scripts/verify_demo_persistence.py`). A shutdown hook alone was NOT enough — on Windows
+  (`brain/scripts/verify_demo_persistence.py`). A shutdown hook alone was NOT enough, on Windows
   `terminate()` never runs it, measured: 106 updates taken, nothing written.
 - **A public reproducible Colab notebook. DONE.** `colab/FlyLingo.ipynb`, generated by
   `tools/gen_colab_notebook.py`. Self-contained: it embeds the three tested modules as base64 with
-  SHA-256 verified on write, so it needs no clone, and it reimplements nothing — it writes the
+  SHA-256 verified on write, so it needs no clone, and it reimplements nothing, it writes the
   modules out and executes them, so there is one implementation rather than a drifting copy.
   Default budget 25 epochs x 3 seeds, about 25 minutes on a free GPU.
   - The original blocker, for the record: the parent repo has **NO GIT REMOTE**, so a notebook could
@@ -312,7 +312,7 @@ Note the account is `vmoh80s@gmail.com` and the token lives at `~/.config/colab-
     bytes, sha256 `e35da783…`, both matching `build_graph.py`; annotations 14,483,314 bytes).
   - Local cache for reference: `cache/source/{edges,annotations}.feather` (1,017 MB) and
     `cache/malecns_v1/{data,indices,indptr,ids}.npy` (198 MB, the built CSR).
-- **The viral post / video. STILL NOT SHIPPABLE — two reasons, both fixable.**
+- **The viral post / video. STILL NOT SHIPPABLE, two reasons, both fixable.**
   1. The 45 s capture at `C:/Users/Lion/Desktop/FlyLingo-45s.mp4` was recorded **before** the
      checkpoint/session fixes, so it may show the fly re-learning from scratch mid-clip. It also
      predates the accelerator fix, so its on-screen accuracy is not a number this project now stands
@@ -320,7 +320,7 @@ Note the account is `vmoh80s@gmail.com` and the token lives at `~/.config/colab-
   2. The claim has to change. "19.6% → ~95%" is out: ~95% came from the suspect path, and the
      verified figure is **87.7% (last-10 mean, sd 1.8, 5 seeds)**. The defensible claim is now
      stronger anyway, because it is measured rather than assumed: **the fly learns to pick the
-     Spanish answer, 19.6% → 87.7%, and only removing the edges breaks it — swapping in a shuffled
+     Spanish answer, 19.6% → 87.7%, and only removing the edges breaks it, swapping in a shuffled
      or random graph of identical size changes nothing measurable.** Say it is memorisation of a
      97-item mapping, not language.
 
@@ -334,21 +334,21 @@ stay out of any published tree.
 
 **The GPU.** Mid-session the user said: *"the training is putting loads on my card, which is
 running at full speed fans"*. All training was stopped immediately (GPU dropped to 11%, 19 W,
-41 °C). **Do not start GPU work without asking.** If GPU work is wanted, prefer Colab — that is
+41 °C). **Do not start GPU work without asking.** If GPU work is wanted, prefer Colab, that is
 what Colab is for here, and the user is right that it fits. Options offered, not yet chosen:
 (1) pause GPU work entirely, (2) `nvidia-smi -pl 150` to cap power, (3) CPU-only.
 
 **Safety / standing rules (from memory, still in force):**
 - Never run destructive commands (`rm -rf`, `del -Recurse`, `git reset --hard`, `diskpart`,
   `reg delete`) unless explicitly requested for that exact path. `approvals.mode=smart`.
-- **Never `git add -A`** in a repo with live subagents — it commits their WIP under your message.
+- **Never `git add -A`** in a repo with live subagents, it commits their WIP under your message.
   Add explicit paths. (This has bitten before.)
 - Never touch v2rayN. Never run Hermes desktop/installer binaries.
 - Research artifacts and reports go to `D:\Research\`, **never Desktop**. (The one exception:
   `FlyLingo-45s.mp4` is on Desktop because the user asked for it there.)
 
 **Shell:** `terminal` runs bash (git-bash/MSYS) on this Windows host. Use POSIX syntax. Native
-tools (git, node, python) do **not** get MSYS path translation — pass `C:/...` forward-slash paths,
+tools (git, node, python) do **not** get MSYS path translation, pass `C:/...` forward-slash paths,
 and use `$LOCALAPPDATA/Temp` not `/tmp` for scratch files a native tool must read. Reference python
 is `D:/Projects/flylingo/brain/.venv/Scripts/python.exe` (uv-managed, **no pip**: use
 `VIRTUAL_ENV=.venv uv pip install`).
@@ -358,7 +358,7 @@ is `D:/Projects/flylingo/brain/.venv/Scripts/python.exe` (uv-managed, **no pip**
 ## 6. Lessons earned this session (do not relearn these)
 
 - **A single final epoch from a single seed is not a measurement.** Single-epoch accuracy swung
-  with an **sd of 7–8.5 points**, range up to 36 points. The 60-epoch run's honest headline is
+  with an **sd of 7 to 8.5 points**, range up to 36 points. The 60-epoch run's honest headline is
   **94.7%** (last-10 mean, sd ~3.9), not the 100% that was the best of 61 draws.
 - **Never let a script hold pre-written verdicts.** `measure_plastic_brain.py` used to pick between
   "the wiring matters" and "it does not" using a 5-point threshold on one number. That emitted a
@@ -390,20 +390,20 @@ is `D:/Projects/flylingo/brain/.venv/Scripts/python.exe` (uv-managed, **no pip**
 
 - The connectome loads and is hash-verified: 166,700 neurons, 25,582,938 edges; edges.feather
   sha256 `e35da783d1c686b2b58b3b87cd6a403ae43bfcfba8bff28e08ef752c1a56afc1`.
-- The 26× GPU speedup **per se** (5.2 ms vs 135.7 ms per six-step settle) — measured, but see the
+- The 26× GPU speedup **per se** (5.2 ms vs 135.7 ms per six-step settle), measured, but see the
   caveat that the GPU path's *numbers* are suspect.
 - The demo plays itself honestly: driven via the API, the lesson advanced `u1l1c1 → u1l1c7` over 12
   answers with the fly's own `as_fly` action, 16,241 brain ticks, spikes streaming, and
   `readout_kind` correctly surviving a session start.
 - Checkpointing round-trips: `intact` 434 KB, `shuffled` 402 KB, `random_graph` 402 KB, `no_edges`
-  **3.8 KB** (its scales never moved — a nice built-in confirmation the control does nothing).
+  **3.8 KB** (its scales never moved, a nice built-in confirmation the control does nothing).
 - 158 tests passing.
 
-**NOT solid — do not report these as findings:**
+**NOT solid, do not report these as findings:**
 
 - The wiring comparison, in any form. Four failed attempts; no trustworthy answer.
 - The 94.7% ceiling and 92.8% final figures: measured on the suspect GPU path. Re-measure on CPU.
-- The 15-epoch table (intact 83.5 / shuffled 74.2 / random 79.4 / no_edges 21.6) — epoch noise.
+- The 15-epoch table (intact 83.5 / shuffled 74.2 / random 79.4 / no_edges 21.6), epoch noise.
 - Anything implying the connectome's specific wiring matters, or that it does not. **Both have been
   claimed and retracted.**
 - The 45 s demo video was recorded before the checkpoint/session fixes, so it may show the fly

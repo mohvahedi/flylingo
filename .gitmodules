@@ -1,0 +1,3 @@
+[submodule "duolingo-clone"]
+	path = duolingo-clone
+	url = https://github.com/mohvahedi/flylingo-app.git

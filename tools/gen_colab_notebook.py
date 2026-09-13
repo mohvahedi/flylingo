@@ -58,9 +58,9 @@ def main() -> None:
         md("""
 # FlyLingo: does a real fly brain's wiring matter, on a task it can learn?
 
-This notebook runs one controlled experiment. A fruit-fly connectome — the
+This notebook runs one controlled experiment. A fruit-fly connectome, the
 [Janelia/Google MaleCNS v1.0](https://www.janelia.org/project-team/flyem), 166,700 neurons and
-25,582,938 directed edges — is used as a reservoir that answers multiple-choice Spanish questions,
+25,582,938 directed edges, is used as a reservoir that answers multiple-choice Spanish questions,
 and the answer is read out of the activity of its own neurons. Four versions of the brain are
 trained identically and compared:
 
@@ -69,7 +69,7 @@ trained identically and compared:
 | `intact` | the measured connectome |
 | `shuffled` | the same graph, nodes relabelled (topology kept, interfaces moved) |
 | `random_graph` | a degree-matched random matrix with the same number of edges |
-| `no_edges` | disconnected — the control that must fail |
+| `no_edges` | disconnected, the control that must fail |
 
 **What this establishes:** whether the specific measured wiring gives any advantage over a
 same-sized graph that is not the fly's.
@@ -148,7 +148,7 @@ for name, blob in FILES.items():
 ## 3. The data
 
 The connectome is public. `step1_build.py` downloads two Feather files over HTTPS and refuses to
-build anything unless they match their exact byte counts and SHA-256 — a truncated download would
+build anything unless they match their exact byte counts and SHA-256, a truncated download would
 otherwise produce a plausible-looking wrong graph.
 
 The published counts are then asserted, and the build fails loudly if any disagrees:
@@ -177,7 +177,7 @@ with the reference before its numbers mean anything. This project learned that t
 `cupyx` sparse matvec was canonicalising the uploaded control matrix **in place**, merging its
 31,231 duplicate `(row, column)` pairs and renumbering every entry after each merge, while the
 trainer wrote weights **by position**. The accelerator therefore trained a matrix the CPU never had,
-which disagreed by 6.0e-01 on a state of scale 0.8 after only six plasticity steps — and agreed
+which disagreed by 6.0e-01 on a state of scale 0.8 after only six plasticity steps, and agreed
 perfectly on an untrained brain, so a naive test passed.
 
 The gate checks three things per arm:
@@ -197,7 +197,7 @@ defect. Gating on it would fail a correct implementation.
 Rules this follows, each of which the project got wrong at least once before:
 
 - **An arm's score is the mean over the last N epochs, never one epoch.** Single-epoch accuracy on a
-  converged run was measured swinging with a standard deviation of 7–8.5 points, with a within-run
+  converged run was measured swinging with a standard deviation of 7 to 8.5 points, with a within-run
   range up to 36 points.
 - **Several seeds, compared paired per seed**, so a seed's difficulty cancels and only the mechanism
   under test differs.
@@ -230,7 +230,7 @@ the count of seeds where intact leads.
 Two traps, both of which this project fell into:
 
 - **Do not read a single epoch.** If the summary says the effect is within the spread, there is no
-  detectable difference — that is the result, not a failure to find one.
+  detectable difference, that is the result, not a failure to find one.
 - **`best control` is a `max()` over two noisy arms.** It is a useful summary, but it biases the
   comparison *against* `intact`, so "intact is 1.4 points behind the best control" is not evidence
   that the real wiring is worse. Read the two per-control differences (`− shuffled`, `− random_graph`)
@@ -256,15 +256,15 @@ Colab T4, 40 epochs, 5 seeds, score = mean of the last 10 epochs:
 Per-control differences: **−0.5%** (sd 2.1) against the shuffle, **+0.7%** (sd 1.7) against the
 random graph. Intact led the best control on **0 of 5** seeds.
 
-**The specific wiring does not matter on this task.** What does: a recurrent graph is required —
+**The specific wiring does not matter on this task.** What does: a recurrent graph is required , 
 the edge-free control sits at 21.6%, below the 26.8% majority-class baseline, while every connected
-arm reaches 87–88%.
+arm reaches 87 to 88%.
 
 A local CPU run at 12 epochs and 3 seeds (63.7% / 62.8% / 64.3% / 21.6%) ties the same way, and all
 20 T4 checkpoints were re-loaded on a different machine and their accuracies recomputed from
 scratch: 20/20 reproduced the reported number exactly.
 
-This is a **null result, and it is the third time this project reached one** — twice before it was
+This is a **null result, and it is the third time this project reached one**, twice before it was
 retracted, once because the read-out was the ceiling and once because the accelerator was corrupting
 the weights. Those reasons are fixed and tested now, which is why the null is reported rather than
 explained away.

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FlyLingo: a fruit fly connectome answers Spanish questions</title>
+<meta name="description" content="A real MaleCNS fruit fly connectome, 166,700 neurons, used as a reservoir to answer Spanish questions, with a control experiment that tests whether the fly's wiring matters." />
+<style>
+  :root {
+    --bg: #0a0b0d;
+    --panel: #121418;
+    --line: #232830;
+    --ink: #e8ebf0;
+    --dim: #8b95a5;
+    --amber: #ffb454;
+    --cyan: #6fd3e8;
+    --green: #6ee7a0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  header { padding: 80px 0 56px; border-bottom: 1px solid var(--line); }
+  h1 {
+    font-size: clamp(2.1rem, 5.5vw, 3.4rem);
+    line-height: 1.1;
+    margin: 0 0 18px;
+    letter-spacing: -0.02em;
+  }
+  h1 .fly { color: var(--amber); }
+  .lede { font-size: 1.15rem; color: var(--dim); max-width: 62ch; margin: 0; }
+  .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+  .pill {
+    font: 500 0.78rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 7px 12px;
+  }
+  .pill b { color: var(--cyan); font-weight: 600; }
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  h2 {
+    font: 600 0.82rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 22px;
+  }
+  h3 { font-size: 1.05rem; margin: 32px 0 10px; }
+  p { margin: 0 0 16px; }
+  a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid rgba(111,211,232,0.3); }
+  a:hover { border-bottom-color: var(--cyan); }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88em; }
+  code { background: #1a1e24; padding: 2px 6px; border-radius: 4px; color: var(--amber); }
+  .grid2 { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .card .head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    font: 600 0.74rem/1 ui-monospace, monospace;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .card iframe { display: block; width: 100%; height: 520px; border: 0; background: #05060a; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 18px; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; }
+  td.num { text-align: right; font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  tr.win td { color: var(--ink); }
+  tr.win td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
+  .muted { color: var(--dim); }
+  .note {
+    background: #14171c;
+    border-left: 3px solid var(--amber);
+    border-radius: 0 10px 10px 0;
+    padding: 16px 20px;
+    margin: 22px 0;
+    color: var(--dim);
+  }
+  .note b { color: var(--ink); font-weight: 600; }
+  ul { padding-left: 20px; }
+  li { margin-bottom: 9px; }
+  .links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+  .btn {
+    display: inline-block;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 10px;
+    padding: 12px 18px;
+    color: var(--ink);
+    border-bottom: 1px solid var(--line);
+  }
+  .btn:hover { border-color: var(--cyan); }
+  .btn span { display: block; color: var(--dim); font-size: 0.78rem; margin-top: 2px; }
+  footer { padding: 48px 0 72px; color: var(--dim); font-size: 0.9rem; }
+  footer p { margin: 0 0 10px; }
+  .kbd { font-family: ui-monospace, monospace; color: var(--amber); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>A fruit fly's brain <span class="fly">answers Spanish questions</span>, and I check whether its wiring is what matters.</h1>
+    <p class="lede">
+      The thing choosing the answers is the real MaleCNS v1.0 connectome: 166,700 neurons and
+      25,582,938 directed edges, published by FlyEM. The prompt is stepped through that measured
+      wiring, and the answer is read out of the activity of the fly's own neurons. Then the same
+      experiment runs three times more on graphs that are not the fly's, to see if any of it matters.
+    </p>
+    <div class="pill-row">
+      <span class="pill"><b>166,700</b> neurons</span>
+      <span class="pill"><b>25,582,938</b> edges</span>
+      <span class="pill"><b>124,177,617</b> contacts</span>
+      <span class="pill"><b>167</b> tests passing</span>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>The answer</h2>
+    <p>
+      The fly learns the task. Take the edges away and it cannot, which says the recurrence is doing
+      real work. But swapping in a shuffled or random graph of the same size changes nothing
+      measurable, so the specific wiring of this fly is not what carries the information.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>arm</th>
+          <th class="num">score</th>
+          <th class="num">spread</th>
+          <th class="num">final epoch</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="win">
+          <td>intact (the real connectome)</td>
+          <td class="num">87.7%</td>
+          <td class="num">1.8%</td>
+          <td class="num">78.1%</td>
+        </tr>
+        <tr>
+          <td>shuffled relabelling</td>
+          <td class="num">88.2%</td>
+          <td class="num">2.3%</td>
+          <td class="num">80.2%</td>
+        </tr>
+        <tr>
+          <td>degree matched random graph</td>
+          <td class="num">87.0%</td>
+          <td class="num">1.9%</td>
+          <td class="num">81.4%</td>
+        </tr>
+        <tr>
+          <td>no edges</td>
+          <td class="num">21.6%</td>
+          <td class="num">0.0%</td>
+          <td class="num">21.6%</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted">
+      40 epochs, 5 seeds, paired per seed, score is the mean of the last 10 epochs. The majority
+      class baseline is 26.8%, so the edge free control sits below it and every connected arm sits
+      far above.
+    </p>
+    <div class="note">
+      <b>Read the per control numbers, not the best of.</b> Against each control separately the real
+      connectome is inside the noise: 0.5 points behind the shuffle and 0.7 points ahead of the
+      random graph, against spreads of 2.1 and 1.7. It led the best control on 0 of 5 seeds. The
+      best control column is a maximum over two noisy arms, so it is biased against intact, and
+      being behind it is not evidence that the real wiring is worse.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Watch it run</h2>
+    <p>
+      Both views below are live in your browser. They run on synthetic drive at the measured
+      magnitudes, because the brain service that steps the real connectome is a Python process and
+      cannot be hosted here. The full local setup runs the real thing.
+    </p>
+    <div class="grid2">
+      <div class="card">
+        <div class="head">the fly and the phone it plays on</div>
+        <iframe src="./fly/" title="FlyLingo fly harness" loading="lazy"></iframe>
+      </div>
+      <div class="card">
+        <div class="head">166,700 neurons, real soma positions</div>
+        <iframe src="./brain/" title="FlyLingo neuron cloud" loading="lazy"></iframe>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:18px">
+      139,668 of the 166,700 points are measured soma positions from the annotations. The rest are
+      filled from a group centroid, and the view says so rather than implying every point is measured.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What this is not</h2>
+    <ul>
+      <li>
+        <b>It is not language.</b> The task is memorisation of a 97 item phrase to answer mapping, and
+        every phrase is shown every epoch. Nothing here generalises to unseen sentences.
+      </li>
+      <li>
+        <b>It is not a fly thinking.</b> The connectome is used as a reservoir. A fixed recurrent
+        structure supplies dynamics, a small readout turns those dynamics into a choice, and the
+        learning happens in the readout. No claim is made that this resembles what a fly does.
+      </li>
+      <li>
+        <b>The answer pools are not cell types.</b> They are disjoint groups of real neurons picked
+        by a seeded shuffle. They are real neurons of the reconstruction, and nothing more is claimed.
+      </li>
+      <li>
+        <b>The wiring result is a null, and it is a real finding.</b> It was reached after two earlier
+        claims in the same project were retracted, once because the readout was the bottleneck and
+        once because a number was read off a single noisy epoch.
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>How it works</h2>
+    <div class="grid2">
+      <div>
+        <h3>Choosing</h3>
+        <p>
+          Four answer pools are disjoint groups of real neurons. The prompt is encoded, the connectome
+          is settled for six recurrent steps, and the answer is whichever pool scores highest, each
+          pool's score being a learned weighted sum over its own neurons. There is no classifier
+          outside the brain.
+        </p>
+        <h3>Learning</h3>
+        <p>
+          117,800 real connectome edges carry a multiplicative scale on their anatomical weight. Those
+          scales are the trained parameters, so the synapses that change are real synapses onto real
+          neurons. The readout is weighted rather than averaged because an equal weight mean over a
+          pool measured only 37.1% linearly separable against 100% for the same neurons read with
+          learned weights.
+        </p>
+      </div>
+      <div>
+        <h3>Two readouts</h3>
+        <p>
+          A second, older readout keeps the graph frozen and learns in a layer beside it. It reaches
+          100% on the 97 challenges and it is the honest control for this one: in the frozen design
+          the readout can absorb any weakness in the wiring, so the wiring question can only be asked
+          once the learning is inside the connectome.
+        </p>
+        <h3>Compute</h3>
+        <p>
+          The recurrence runs on the GPU, 26x faster than the CPU path at 5.2 ms per six step settle
+          against 136 ms. The accelerator is gated against the CPU reference before any figure is read,
+          which is how a defect in it was found rather than published.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Get it</h2>
+    <div class="links">
+      <a class="btn" href="https://github.com/mohvahedi/flylingo">Source<span>the full project, all of it</span></a>
+      <a class="btn" href="./FlyLingo.ipynb" download>Notebook<span>a reproducible Colab run, self contained</span></a>
+      <a class="btn" href="./notebook">Read the notebook<span>without leaving the browser</span></a>
+      <a class="btn" href="./media/flylingo-45s.mp4">45s clip<span>the demo answering, silent</span></a>
+    </div>
+    <p class="muted" style="margin-top:20px">
+      The notebook downloads the connectome from the public Source Coop bucket, checks the source
+      digests, builds the graph, gates the accelerator, and runs the four arm comparison. It reuses
+      the project's own modules rather than a copy, so the numbers it reports come from the code the
+      test suite covers.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Honest about the middle</h2>
+    <p>
+      Three things went wrong here and all three are in the repository rather than tidied away. The
+      first wiring claim came from a readout too weak to see the answer, so the comparison was
+      measuring the readout. The second came from reading a single epoch of a single seed, where the
+      same run says the opposite if you stop at epoch 10, 20 or 30 instead of 15. The third was a
+      real bug in the accelerated path: a cupyx sparse matvec was renumbering the uploaded control
+      matrix in place, and because the trainer writes weights by position, the GPU trained a matrix
+      the CPU never had. It agreed to 3e-07 on an untrained brain and diverged by 6e-01 after six
+      steps, so it passed the obvious test and corrupted exactly the comparison being run. That one
+      is fixed, pinned by a test that fails on the old code, and the equivalence gate now runs before
+      any number is read.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>
+      Connectome: <b>MaleCNS v1.0</b> from the FlyEM project at Janelia Research Campus, used
+      unmodified apart from a retention rule and row normalisation. Downloaded at runtime from the
+      public Source Coop bucket, never redistributed here.
+    </p>
+    <p>
+      Fly model <span class="kbd">fly.glb</span> by victorberdugo1 (CC-BY-4.0). Handset by peroroo
+      (CC-BY-SA-4.0, share alike, so adaptations of it carry the same licence). The lesson shell
+      starts from sanidhyy's duolingo-clone (MIT). The reference implementation this was checked
+      against is nftechie's FLM (MIT), and is not redistributed here.
+    </p>
+    <p>
+      Built with the help of an AI agent. Every number on this page came from a command that ran, and
+      the scripts that produced them are in the repository.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,483 +1,174 @@
-# FlyLingo: a fruit fly learns Spanish
+# FlyLingo
 
-A Duolingo-style Spanish lesson where the thing choosing the answers is a real fruit-fly
-connectome, with the fly's body and its neural activity streamed live beside the question.
+A real fruit fly connectome answers Spanish questions, and a control experiment that asks whether the fly's wiring is what makes it work.
 
-The wiring is Janelia/Google **MaleCNS v1.0**: 166,700 neurons, 25,582,938 directed edges,
-124,177,617 synaptic contacts, from the complete male fly central nervous system published
-September 2026. The graph is **frozen**. What learns is a small readout bolted onto it,
-nudged by reward on each answer.
+**Live: [flylingo.mohv80s.workers.dev](https://flylingo.mohv80s.workers.dev)**
 
-## What this actually is, and is not
+The thing choosing the answers is the **MaleCNS v1.0** reconstruction from the FlyEM project at Janelia: 166,700 neurons, 25,582,938 directed edges, 124,177,617 synaptic contacts. A prompt is encoded, the connectome is settled for six recurrent steps, and the answer is read out of the activity of the fly's own neurons. Then the same experiment runs three more times on graphs that are not the fly's, to find out whether any of it matters.
 
-The fly does not understand Spanish. Measured wiring supplies fixed dynamics; a small
-trained readout reads those dynamics out into a choice. Anyone who tells you a connectome
-"learned" something is describing a decoder they trained.
+It does not, or at least the specific wiring does not. That is the finding, and it took three attempts to get there honestly.
 
-What makes this project worth building is the part the September 2026 wave skipped: the
-**control experiment**. Does the measured connectome beat a shuffled, edge-free, or
-degree-matched random graph of identical size at matched parameters on the same task?
-Every answer runs in one of four modes, and the mode is displayed at all times so a demo
-can never be mistaken for the intact brain:
+## The question
 
-| Mode | What it is |
+Feed a fixed recurrent network a prompt, watch it settle, and read the answer off its state. That much is standard reservoir computing, and it would work with almost any recurrent graph. So the interesting question is not whether it works. It is whether **this** graph, a real one measured synapse by synapse from an actual fly, beats a graph of the same size that is not the fly's.
+
+Four versions of the brain are trained identically and compared:
+
+| arm | what the wiring is |
 |---|---|
-| `intact` | the measured MaleCNS wiring |
-| `shuffled` | fixed node relabeling of W relative to the input/output interfaces, topology preserved |
-| `random_graph` | degree-matched random sparse matrix, same nnz |
-| `no_edges` | W zeroed, so features go exactly to zero |
+| `intact` | the measured connectome |
+| `shuffled` | the same graph with nodes relabelled, so the topology survives but the input and output interfaces move |
+| `random_graph` | a degree matched random matrix with the same number of edges |
+| `no_edges` | disconnected, so the state is exactly zero |
+
+## The answer
+
+| arm | score | spread | final epoch |
+|---|---|---|---|
+| `intact` | **87.7%** | 1.8% | 78.1% |
+| `shuffled` | 88.2% | 2.3% | 80.2% |
+| `random_graph` | 87.0% | 1.9% | 81.4% |
+| `no_edges` | 21.6% | 0.0% | 21.6% |
+
+40 epochs, 5 seeds, paired per seed, score is the mean of the last 10 epochs. The majority class baseline is 26.8%.
+
+**A recurrent graph is required.** Take the edges away and the fly is at 21.6%, below the baseline, while every connected arm reaches the high eighties. The recurrence is doing real work.
+
+**Which recurrent graph makes no measurable difference.** Against each control separately, the real connectome is 0.5 points behind the shuffle and 0.7 points ahead of the random graph, against spreads of 2.1 and 1.7. It led the best control on 0 of 5 seeds.
+
+One trap when reading that table. "Best control" is a maximum over two noisy arms, so it is biased against `intact`, and "intact is 1.4 points behind the best control" is **not** evidence that the real wiring is worse. Read the per control differences, each against its own spread.
+
+The final epoch column is there for a reason too. It sits 6 to 9 points below the run's own level every time, which is why the score is a tail mean and not the last number the loop happened to print.
+
+## What is not claimed
+
+- **This is not language.** It is memorisation of a 97 item phrase to answer mapping, and every phrase is shown every epoch. Nothing here generalises to unseen sentences.
+- **This is not a fly thinking.** The connectome is used as a reservoir. It supplies fixed dynamics, a readout turns those into a choice, and the learning happens in the readout.
+- **The answer pools are not cell types.** They are disjoint groups of real neurons chosen by a seeded shuffle. They are real neurons of the reconstruction, and nothing more is claimed.
+- **The null result is not a failure to find something.** It is the third time this project landed there, and the first time with a measurement that could have come out the other way.
+
+## How it works
+
+The design worth describing is the second readout, `plastic_brain`, because it is the one where the wiring question can actually be asked.
+
+**Choosing.** Four answer pools are disjoint groups of real neurons. The prompt is encoded, the connectome settles, and the answer is whichever pool scores highest, each pool's score being a learned weighted sum over its own neurons. There is no classifier outside the brain and the argmax is over the brain's own populations.
+
+**Learning.** The trained parameters are **117,800 real connectome edges**, the ones whose target neuron lies in a pool, each carrying a multiplicative scale on its anatomical weight. The synapses that change are real synapses onto real neurons.
+
+The readout is weighted rather than averaged for a measured reason. An equal weight mean over a pool was only 37.1% linearly separable against 100% for the same neurons read with learned weights. Averaging discards *which* neurons fired, and that is where the signal is.
+
+There is also an older readout, `prompt_index`, which keeps the graph frozen and learns in a 516 parameter layer beside it. It reaches 100% on the 97 challenges. It is the honest control for the newer one, because in the frozen design the readout can absorb any weakness in the wiring, and a control comparison run through a readout like that measures the readout.
+
+## Where this went wrong
+
+Three real errors, all of them kept in the repository rather than tidied away.
+
+**The first wiring claim came from a readout too weak to see the answer.** An equal weight mean readout produced intact +34.0%, shuffled +4.1%, random -5.2% and was reported as "the wiring matters". Probing the frozen representations showed the readout's own input was only 37.1% separable while the state it was averaging carried 100%. The spread belonged to the readout. Retracted.
+
+**The second came from one epoch of one seed.** A 15 epoch run reported intact 83.5% against shuffled 74.2% and printed a verdict. The same run's per epoch gap averaged +0.1 points with a standard deviation of 3.7, ranging from -9.3 to +8.2, and intact led in 18 of 40 epochs, which is 45%, where a coin flip is 50%. Stopping at epoch 10, 20, 30 or 60 says the opposite of stopping at 15. Retracted.
+
+**The third was a genuine bug in the accelerated path.** A `cupyx` sparse matvec canonicalises a non-canonical CSR matrix in place. The random control is built with 31,231 duplicate `(row, column)` pairs on purpose, so the first matvec merged them, rewrote the index pointers, and collapsed the uploaded mirror from 25,582,938 stored entries to 25,551,707. The trainer writes weights **by position**, so from that moment the GPU trained a matrix the CPU never had. It agreed to 3e-07 on an untrained brain and diverged by 6.0e-01 after six plasticity steps, which means it passed the obvious test and corrupted exactly the comparison being run. Every GPU figure from that period was wrong and is retracted.
+
+That one is fixed, pinned by a test that fails on the old code, and the equivalence gate now runs **before** any number is read: fresh settles must agree, the uploaded matrix must keep the CPU's exact layout, and trained weights must land on the same entries. What remains between the two devices is float32 training drift of order 1e-3, which is reported rather than gated, because gating on it would fail a correct implementation.
 
 ## Verified numbers
 
-Every figure below came from a command that ran on this machine against the real data.
+| quantity | value |
+|---|---|
+| retained neurons | 166,700 |
+| directed edges | 25,582,938 |
+| synaptic contacts | 124,177,617 |
+| distinct measured soma positions | 139,668 of 166,700 |
+| full graph step | 24.5 ms median, 40.9 Hz single threaded |
+| GPU speedup on the recurrence | 26x, 5.2 ms against 136 ms per six step settle |
+| plastic synapses trained | 117,800 |
+| Spanish curriculum | 4 units, 15 lessons, 97 challenges |
+| tests | 167 passing |
 
-| Quantity | Value | How |
-|---|---|---|
-| Retained neurons | 166,700 | manifest, and independently recomputed |
-| Directed edges | 25,582,938 | manifest, and recomputed from CSR `nnz` |
-| Synaptic contacts | 124,177,617 | manifest |
-| Raw edge rows | 151,856,684 | manifest |
-| Source integrity | both feathers match their published sha256 | recomputed |
-| Full-graph step | 24.5 ms median (min 20.3, max 35.7) | 20 timed steps |
-| Implied rate | 40.9 Hz single-threaded | derived from the above |
-| 20 Hz stream budget | fits, with room | 50 ms budget vs 24.5 ms step |
-| Sampled state rms | 0.105 | real challenge embeddings |
-| abs(state) p50 / p95 / max | 0.051 / 0.274 / 0.717 | 512 sampled neurons |
-| Spikes per frame | about 5 of 512 | `abs(state) >= 0.5` |
-| Readout parameters | 34,052 total, 1,703 dopamine-gated | adapter |
-| Spanish curriculum | 4 units, 15 lessons, 97 challenges | served by `/curriculum` |
-| Distinct soma coordinates | 139,668 of 166,700 | `tools/extract_soma_positions.py` |
-| Neurons with a measured soma | 139,662 | `somaLocation` in the annotations feather |
-| Placement filled from group centroid | 27,038 | (class, in-degree decile) centroid |
-| Connectome tick rate | 10 Hz, continuously between answers | background thread, locked |
-| Test suite | 167 passed | `pytest tests/` |
-
-Two honest notes on those last rows. The spike threshold is a **visualization convention on
-an abstract rate model**, not a claim about biological spiking, matching the reference
-implementation's own wording. And all three live modes have nearly the same activity
-magnitude (0.105 intact, 0.108 shuffled, 0.096 random), so a viewer cannot tell them apart
-by looking; they differ in pattern, not level. That is why the mode badge exists.
-
-### Result: the readout learns the vocabulary; the connectome does not beat its controls
-
-Reported in full, because the interesting part is *what* the learning is attributable to.
-
-**The learning works.** A trained prompt-index readout answers all 97 curriculum challenges
-correctly: measured 1.000, chance 0.250, 516 parameters.
-
-**But the connectome contributes nothing measurable.** Four independent measurements:
-
-| # | Measurement | Result | What it rules out |
-|---|---|---|---|
-| 1 | Vocabulary-disjoint held-out, encoding only, 5-fold CV over all 97 | 0.2784 (p=0.294) | No generalisation is possible from character n-grams |
-| 2 | Learn-to-criterion, option-scoring framing, all 97 repeated | 0.536 | Correctness is relational and cannot be recovered by a global linear rule |
-| 3 | Same framing, reservoir features vs raw vs controls | 0.567 vs 0.536, intact == shuffled == random | The connectome's features add nothing on that framing |
-| 4 | Prompt-index memorisation, reservoir features | **1.000** | It works, but see the spread |
-
-Measurement 4 is the one that matters for attribution. All three wirings and the raw
-encoding reach exactly the same score:
-
-| Features | dim | Accuracy (3 seeds) |
-|---|---|---|
-| raw prompt encoding, no reservoir | 256 | 1.000 |
-| intact connectome | 128 | 1.000 |
-| shuffled graph | 128 | 1.000 |
-| degree-matched random graph | 128 | 1.000 |
-
-Spread across the three wirings: **0.000**. The encoding with *no reservoir at all* also
-reaches 1.000. So the 166,700-neuron wiring is not needed for this result: it supplies a
-fixed nonlinear feature map, and any fixed nonlinear feature map of the same width does the
-same job. The learning is in the readout.
-
-This is a negative result about the connectome and it is reported as one, on the live UI as
-well as here. Earlier iterations of this README claimed the null was uninformative because
-the task was unsolvable; that was correct about the *first* framing (measurements 1 and 2)
-but it stopped being the whole story once a learnable framing existed (measurement 4). Being
-able to learn the task and finding the biology irrelevant to it is a stronger and more
-useful statement than "the task was too hard".
-
-What would actually test the connectome's dynamics is a task where memory or temporal
-integration is the bottleneck, rather than one-to-one vocabulary lookup that a linear map
-solves outright.
-
-## Layout
-
-```
-flylingo/
-  cache/source/       raw MaleCNS feathers (1.05 GB edges + 14 MB annotations), hash-verified
-  cache/malecns_v1/   built CSR graph + manifest (write-once, everyone reads it)
-  brain/              Python service: connectome, reservoir, learning, curriculum, API
-  viz-fly/            standalone harness: the 3D fly
-  viz-brain/          standalone harness: the 166,700-neuron cloud
-  duolingo-clone/     sanidhyy/duolingo-clone, stripped of auth for local use
-  flm/                reference implementation, read-only
-  INTERFACES.md       the frozen contract every component was built against
-  tools/              end-to-end checks and the viz sync script
-```
+Source integrity is checked, not assumed. Both Feather files are verified against their published byte counts and SHA-256 before a single row is read, and the build refuses to proceed on a mismatch. The edge source is 1,051,241,946 bytes with SHA-256 `e35da783d1c686b2b58b3b87cd6a403ae43bfcfba8bff28e08ef752c1a56afc1`, which matches the value pinned in `brain/scripts/build_graph.py`.
 
 ## Running it
 
 Two processes. The brain service first:
 
 ```bash
-cd D:/Projects/flylingo/brain
+cd brain
 .venv/Scripts/python.exe -m uvicorn brain.api:app --host 127.0.0.1 --port 8770
 ```
 
 Then the app:
 
 ```bash
-cd D:/Projects/flylingo/duolingo-clone
-bun run dev --port 3100
+cd duolingo-clone
+bun run start --port 3300
 ```
 
-Open http://127.0.0.1:3100/lesson/fly
+Open `http://127.0.0.1:3300/fly` for the HUD, or `/lesson/fly` for the phone-in-front-of-the-fly view, or `/lesson/fly/brain` for all 166,700 neurons.
 
-There is also a full-screen connectome view at http://127.0.0.1:3100/lesson/fly/brain,
-which renders all 166,700 neurons and lets you switch control modes while watching.
+**Build, then restart, then verify.** `next start` caches its build manifest at boot, so rebuilding under a running server leaves it serving old HTML against new hashed chunks. The page hangs on its loading state with a chunk 404 and it looks exactly like a code bug. It cost a full debugging pass here.
 
-Without the brain service the page still renders and tells you the service is not running,
-with the exact command to start it. The lesson needs no account, database, or payment
-provider, which is why the clone's auth was removed for this route.
+**Commit inside `duolingo-clone` too.** It is its own repository and the parent tracks a pointer to it, so app work committed only in the parent is not saved. See [the app repository](https://github.com/mohvahedi/flylingo-app).
 
-**Restart the app after every rebuild.** `next start` caches its build manifest at boot, so a
-rebuild underneath a running server leaves it serving the old HTML against new hashed chunks.
-The symptom is a page stuck on its loading state plus a 404 on a chunk, which looks like a
-code bug and is not one. This cost real debugging time here: `/lesson/fly` appeared broken
-while the API was perfectly healthy. Build, then restart, then verify.
-
-The standalone harnesses run on their own, with synthetic idle animation and no backend:
+The visualization harnesses run standalone with synthetic drive and no backend:
 
 ```bash
-cd D:/Projects/flylingo/viz-fly   && bun run dev      # or viz-brain
+cd viz-fly    # or viz-brain
+bun run dev
 ```
 
 ## Rebuilding the connectome
 
 ```bash
-cd D:/Projects/flylingo
 brain/.venv/Scripts/python.exe build_graph_from_reference.py
 ```
 
-This verifies both source hashes, streams the 1 GB edge table in Arrow batches so peak
-memory stays low, and writes `cache/malecns_v1/` plus a manifest carrying the sha256 of
-every array. It refuses to proceed on a hash mismatch.
+It verifies both source hashes, streams the 1 GB edge table in Arrow batches so peak memory stays low, and writes `cache/malecns_v1/` with a manifest carrying the SHA-256 of every array.
 
-## Verifying it end to end
+## Layout
 
-```bash
-python tools/e2e_play.py
+```
+brain/            Python service: connectome, reservoir, learning, curriculum, API
+viz-fly/          the 3D fly and the phone it plays on
+viz-brain/        the 166,700 neuron cloud
+duolingo-clone/   the lesson shell, a fork of sanidhyy/duolingo-clone (submodule)
+colab/            the reproducible notebook and the single file Colab runner
+tools/            end to end checks, sync scripts, and the analysis tools
+INTERFACES.md     the frozen contract every component was built against
 ```
 
-It loads the real page in headless Chromium, answers challenges correctly by looking up
-the true option index, and reports what actually happened: advancement, accuracy, the
-wrong-then-retry path, whether the canvases are painting, and any console errors.
+`viz-fly` and `viz-brain` are the source of truth and `duolingo-clone/components/viz/` is generated from them by `python tools/sync_viz.py`. Edit the harnesses, not the copy.
 
-## The two visualization components
+## The notebook
 
-Both are standalone Vite + React + TypeScript projects exporting one frozen interface, and
-both must render with no props at all so the app can mount them before the socket opens.
+`colab/FlyLingo.ipynb` runs the whole thing on a free Colab GPU in about 25 minutes. It has no git clone step, because the parent repository had no remote when it was written, so it embeds the project's own modules as base64 with their SHA-256 verified as they land on the VM. It reimplements nothing, so the numbers it reports come from the code the test suite covers.
 
-- `FlyStage` (viz-fly): the fly built from primitives in code, with idle, walk, groom,
-  proboscis, and startle states, its glow driven by the connectome.
-- `BrainCloud` (viz-brain): the neuron cloud on its own route. The soma coordinates are
-  **real**: 139,668 distinct measured positions out of 166,700, from the `somaLocation`
-  column of `annotations.feather`. The UI states which points are measured and which are
-  filled from a group centroid rather than implying every point is measured.
+The data needs no upload. The source Feathers are in a public bucket and are downloaded, byte counted and hashed at run time.
 
-`components/viz/` in the app is generated by `python tools/sync_viz.py` from those two
-projects. Edit the harnesses, not the copy.
+## Deployment
 
-Both point-size handling and the cloud's ambient colour needed real fixes before the brain
-was visible at all, and the recorded lessons are in the source comments:
-
-- Point size was computed as `uSize * (1.0 / max(-mv.z, 0.35))`. The cloud spans only about
-  [-1, 1] with the camera roughly 3 units back, so that factor is about 0.33 and a 2.4px
-  point became roughly 0.8px. Sub-pixel points rasterise to almost nothing. Sizes are now
-  in pixels scaled by viewport height, with a floor so a point always covers a pixel.
-- Non-active neurons were drawn in a dark navy that, additively blended at its alpha, landed
-  near RGB(5,14,24), i.e. invisible. The ambient colour is now bright enough to read the
-  anatomy on its own.
-
-## Verifying it end to end
+The live site is a Cloudflare Worker serving static assets from `site/`:
 
 ```bash
-python tools/e2e_play.py     # the lesson loop, answering correctly
-python tools/e2e_modes.py    # all four control modes, in the browser
-python tools/e2e_viz.py      # both 3D views render, and no_edges is inert
+npx wrangler deploy
 ```
 
-`e2e_play.py` loads the real page in headless Chromium, answers challenges correctly by
-looking up the true option index, and reports advancement, accuracy, the wrong-then-retry
-path, whether the canvases are painting, and any console errors.
+`site/` holds the landing page, both built harnesses, the rendered notebook, and a 45 second clip of the demo answering questions. The three.js bundles account for almost all of the 18 MB.
 
-One measurement note worth keeping: `e2e_viz.py` uses element screenshots rather than
-`readPixels`. react-three-fiber does not set `preserveDrawingBuffer`, so reading pixels
-outside a frame returns zeros and would report a working scene as black.
+The app itself cannot be hosted the same way. It needs Clerk, Postgres, Stripe, and the Python service that steps the connectome, so the live site shows the visualizations running on synthetic drive and says so rather than implying the full pipeline is up there.
 
-## The specimen model
+## Licences and credits
 
-`fly.glb` is a static mesh used under **CC-BY-4.0**, which requires attribution wherever it
-is displayed:
+Two third party 3D models are used and both require attribution. Attribution is rendered in the HUD, where the work is shown, not only in this file.
 
-| | |
-|---|---|
-| Title | Fly |
-| Author | victorberdugo1 (https://sketchfab.com/victorberdugo1) |
-| Source | https://sketchfab.com/3d-models/fly-6a4470f884554864827d848718b2b6bc |
-| Licence | CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/) |
-| File | 729,336 bytes, md5 `34f48c57967d2f839f0b235a03103375` |
-
-The credit is rendered in the HUD, both beside the specimen panel and in the attribution
-line. Removing the model must remove the credit with it.
-
-Inspected structure, since it matters for how it can be animated: 172 nodes, 57 meshes,
-7 materials, 9 embedded textures, 6,511 vertices, **no skin and no baked animation**. It is
-animated procedurally by driving its named nodes:
-
-| Group | Nodes | Used for |
+| asset | author | licence |
 |---|---|---|
-| Wings | `FLYALI0`, `FLYALI`, `FLYALA0`, `FLYALA` | flutter and hold angle |
-| Legs | `FLYPAT33` to `FLYPAT40` and siblings (48 nodes, 6 legs of several segments) | walk cycle |
-| Eyes | `FLYOJO`, `FLYOJO0` | |
-| Head | `FLYCUL` | head turn, feeding gesture |
-| Body root | `FLYMAIN` | bob, sway, pitch, walk translation |
+| `fly.glb` | [victorberdugo1](https://sketchfab.com/victorberdugo1) | CC-BY-4.0 |
+| `smartphone_with_green_screen.glb` | peroroo | CC-BY-SA-4.0 |
 
-The raw bounding box is about 4,765 x 5,767 x 3,527 units, so the mesh is roughly 6000x
-too large for a normal scene and is centred near `[319, -348, -511]`. Fit it at load time
-from its computed bounding box rather than hard-coding a scale, so replacing the asset does
-not silently break the framing.
+**The handset is share alike.** Adaptations of it must be released under the same licence, and that obligation would travel with any distribution of this project.
 
-## Two traps that will bite you again
+The connectome is the MaleCNS v1.0 release from the FlyEM project at Janelia Research Campus. It is downloaded at run time and never redistributed here. Check the dataset's own terms before reusing it.
 
-**1. `duolingo-clone/` is its own git repository.** The parent repo therefore tracks only a
-commit pointer to it, and the entire app layer (`components/flylingo/`, `components/viz/`,
-`lib/flylingo/`, `app/lesson/fly/`) is invisible to the parent's history. Commit inside
-`duolingo-clone/` too, or the app work is not saved. De-nesting (removing the nested `.git`)
-would make the parent track it directly, but that is destructive and has not been done.
+The lesson shell starts from [sanidhyy/duolingo-clone](https://github.com/sanidhyy/duolingo-clone) (MIT, Sanidhya Kumar Verma). The reference implementation this work was checked against is [nftechie/flm](https://github.com/nftechie/flm) (MIT, Alex Wormuth), which is deliberately **not** included in this repository.
 
-**2. Build, THEN restart the server, THEN verify.** `next start` holds a build manifest in
-memory. Rebuilding while it runs leaves it serving a stale manifest, which presents as the
-page hanging on "loading" with a 404 and a chunk-not-found error. The symptom is
-indistinguishable from a code bug, and it cost a full debugging pass. The order is always
-build → restart → verify.
-
-## Syncing the visualizations into the app
-
-`viz-fly/` and `viz-brain/` are standalone Vite projects and the source of truth.
-`duolingo-clone/components/viz/` is **generated** by `python tools/sync_viz.py`. New work in
-the harnesses does not appear in the app until that script runs, so run it, rebuild, and
-restart. The app was briefly showing the procedural fly and labelling it "PROCEDURAL
-SPECIMEN" for exactly this reason.
-
-## The hero scene: the fly, and the phone it plays on
-
-`viz-fly/src/fly/PhoneStage.tsx` is the hero panel. It places the handset on a lit stage with
-the real Duolingo lesson on its screen, and flies the specimen to the answer it picked.
-
-The screen is drawn by `duolingoScreen.ts`, not by the DOM. That is deliberate:
-
-- The fly has to fly TO the answer. That needs the pixel rectangle of every option card, so
-  the scene can map the card's position through the phone's world matrix. Rasterising live DOM
-  gives no such handle; drawing the screen means the geometry is known exactly.
-- It has to be a texture on a mesh in a 3D scene, lit and seen at an angle.
-- No rasteriser dependency and no font-inlining failure mode. The typeface is loaded with the
-  FontFace API and every element is drawn deterministically.
-
-The same numbers that draw a card decide where the fly goes, so the two cannot disagree. That
-is verified rather than assumed: `tools/check_card_target.py` reads back where each card lands
-in world space and asserts the fly's target sits on the card it chose.
-
-### What the asset needed, and why
-
-`smartphone_with_green_screen.glb` could not be used as shipped:
-
-1. **Its node chain already normalises it.** `Sketchfab_model` applies the Z-up to Y-up
-   rotation, then `.fbx` scales by 0.01, then `Cube` scales by 100 and rotates again. The net
-   result is an upright, portrait handset, but its glass faces world +X (measured normal
-   `[0.984, 0, 0.179]`), so a quarter turn brings it round to the viewer. An early version
-   applied its own "stand it up" rotation on top and turned the phone a second time.
-2. **Its body materials are pure black** (`baseColor 0,0,0`), which is invisible on a dark
-   stage: the first renders read as a white card floating in a void. They are lifted to a dark
-   grey in `phoneModel.ts`.
-3. **Its screen mesh cannot be textured.** `Cube_chroma_0` is 47 triangles whose UVs span only
-   0.62 x 0.74 of the unit square. A clean plane replaces it, sized to the measured rectangle
-   (`x 0.00554`, `0.06982 x 0.15482`, normal `+X`) and parented to the same node, so it inherits
-   the identical transform chain. Parenting it to the scene root was the first bug: the plane
-   then ignored the asset's scale and rotation and floated off the handset.
-
-### Two traps this scene cost time on
-
-- **Per-frame lerp ties motion to frame rate.** Under software rendering the fly took over 26
-  seconds to cross the scene and never arrived. The flight now interpolates against
-  `performance.now()`, so it takes the same 1.6 seconds on any machine.
-- **A draw effect keyed on an unstable array loops.** Callers naturally write
-  `options={list.map(o => ({text: o}))}`, whose identity changes every render; the effect
-  redrew, set state, and re-ran forever. It also reset the telemetry interval, which is why the
-  probe kept coming back empty. It is keyed on a serialised value now.
-
-The fly's per-tarsus contact patches are floor decals and are switched off here: up at the
-screen they painted dark smudges across the white card.
-
-## Licences
-
-Two third-party models are used. Both require attribution, and one is share-alike.
-
-| Asset | Author | Licence |
-|---|---|---|
-| `fly.glb` | victorberdugo1 | CC-BY-4.0 |
-| `smartphone_with_green_screen.glb` | peroroo | **CC-BY-SA-4.0** |
-
-**CC-BY-SA-4.0 is share-alike.** Adaptations of that handset must be released under the same
-licence. If this project is ever distributed or licensed, that obligation travels with it, and
-it is worth deciding deliberately rather than discovering later. Attribution for both models is
-rendered in the HUD footer, because a licence that requires credit requires it where the work
-is shown, not only in a repository.
-
-## What "the fly learns Spanish" actually means, and what trains
-
-This is the part of the project most likely to be overclaimed, so it is written down precisely.
-
-**What really happens, per answer:**
-
-1. The prompt is encoded (a deterministic character n-gram hash, `brain/encoders.py`) and stepped
-   through the **real connectome** — 166,700 neurons, 25.58M edges, 24.5 ms per step. That is
-   genuine: the prompt drives the measured wiring and the resulting activity is what the readout
-   sees. The live view streams those spikes at 20 Hz and the connectome steps continuously
-   between answers, so the activity on screen is produced, not replayed.
-2. A **516-parameter readout** maps that activity to one of the four options. It samples, so it
-   is stochastic.
-3. The answer is scored. A correct pick delivers **dopamine**, which is the reward signal that
-   gates the weight update; a wrong one takes dopamine away. The pulse the UI draws and the
-   signal that gated the last update are the same number, which is why the bar and the curve
-   move together rather than merely correlating.
-4. The readout is then trained **supervised against the lesson's own answer key**, with
-   **rehearsal** from a replay buffer.
-
-**Why rehearsal is there, measured.** Three update schemes were tried over the real 97-challenge
-curriculum, each from a fresh readout:
-
-| scheme | outcome |
-|---|---|
-| reward-only (reinforce the sampled action) | plateaus near **45%** at every learning rate tried |
-| supervised, one update per answer | about **40%** in a single pass |
-| supervised + **60 rehearsal steps per answer** | **92-100% within about 100 answers** |
-
-The first fails because a wrong answer only says "not that one", which teaches nothing about
-which option was right. The second fails because one answer is one update, and 97 updates cannot
-fit 516 parameters. A learner rehearses; that is the whole trick, and it is standard practice
-rather than a shortcut.
-
-**What this is, honestly.** It is **memorisation of the phrase-to-answer mapping**, which is
-exactly what this project measured the readout to be good at. The connectome itself confers **no
-measurable learning advantage** on this task: the intact connectome, a shuffled graph, a
-degree-matched random graph, and the raw encoding with no reservoir at all all reach the same
-accuracy. That statement is in the HUD footer and should stay there.
-
-### There are two readouts, and the second one puts the learning in the connectome
-
-Everything above describes the **prompt-index** readout, which is the default and keeps the graph
-frozen. A second readout exists and is selectable, because the frozen design has a weakness worth
-being honest about: the connectome is only a fixed feature map, so the thing that learns is a layer
-beside the brain rather than the brain.
-
-**`plastic_brain`** moves both jobs inside it:
-
-- **choosing.** Four answer pools are disjoint groups of *real* neurons. The prompt is encoded, the
-  connectome settles for six recurrent steps, and the answer is whichever pool scores highest, each
-  pool's score being a *learned* weighted sum over its own neurons. There is no classifier outside
-  the brain; the argmax is over the brain's own populations.
-- **learning.** The trainable parameters are **117,800 real connectome edges** — the ones whose
-  target neuron lies in a pool — each carrying a multiplicative scale on its anatomical weight. The
-  synapses that change are real synapses onto real neurons.
-
-Two details that matter for honesty. The pools are selected by a seeded permutation, so they are
-real neurons of the reconstruction but are **not anatomically identified cell types**, and are not
-claimed to be. And an equal-weight mean over a pool measured only 37.1% linearly separable against
-100% for the same neurons read with learned weights, so the readout is weighted because averaging
-discards *which* neurons fired, which is where the signal is.
-
-The four-arm table above was measured on **this** readout, because it is the design in which the
-wiring is actually inside the learning loop, and therefore the only one where the wiring question can
-be answered at all: in the frozen design the readout can absorb any deficiency in the wiring.
-
-**The demo does not delete your progress.** The plastic brain checkpoints every 100 plasticity
-updates and on shutdown, and a restart resumes those weights, with `checkpoint_status` naming which
-state is live (`resumed` / `scales at 1.0` / `refused`). Selecting the plastic brain with
-`{"fresh": false}` resumes rather than wiping; `{"fresh": true}` is the deliberate reset. Persisting
-only on a graceful shutdown would not have been enough — on Windows `terminate()` is a hard kill, so
-the hook never runs, which was measured before the periodic save was added.
-
-**Training is a switch, not a claim.** `POST /train {"fresh": true}` wipes the readout to a naive
-state (measured: chance across the course) so the learning can be watched from zero.
-`{"training": false}` freezes the weights, which is the control: same lesson, same connectome,
-same readout, plasticity off, and the curve flattens. The shipped checkpoint is already trained,
-so with it loaded there is nothing to watch — the UI says which state it is in rather than
-implying a pretrained model is learning.
-
-**The course advances.** 15 lessons across 4 units, 97 challenges. Finishing a lesson moves to
-the next one and wraps at the end, so a public demo does not dead-end on the first lesson. The
-frame reports `lesson_pos`, `lesson_total`, `lesson_title` and `lessons_completed`.
-
-## Does the connectome's wiring matter? No.
-
-Two claims, kept separate because they have different evidence:
-
-1. **A recurrent graph is necessary.** The edge-free control sits at chance (21.6%) because its
-   state is exactly zero. Unambiguous.
-2. **Which graph is irrelevant.** measured, shuffled and degree-matched random all land in the
-   same place.
-
-The evidence for (2) is the per-epoch series, not a spread figure. Over epochs 21-60 of a
-60-epoch run, the gap between the intact connectome and the best control was **+0.1 points on
-average, with an sd of 3.7**, ranging from -9.3 to +8.2, and intact led in **18 of 40 epochs
-(45%)**. A coin flip is 50%.
-
-Single-epoch accuracy swings by 7-8.5 points within one arm, so a reading taken at one epoch is a
-draw from that distribution. Stopping this same run at epoch 15 gives intact 83.5% against
-shuffled 74.2% and looks like a wiring advantage; stopping at 10, 20, 30 or 60 does not.
-
-| arm | last-10-epoch mean | sd | final epoch mean |
-|---|---|---|---|
-| intact (MaleCNS v1.0) | **87.7%** | 1.8% | 78.1% |
-| shuffled | 88.2% | 2.3% | 80.2% |
-| random_graph (degree-matched) | 87.0% | 1.9% | 81.4% |
-| no_edges | 21.6% | 0.0% | 21.6% |
-
-Colab T4, 40 epochs, 5 seeds, paired per seed (`colab/step2_measure.py`). Majority-class baseline
-26.8%.
-
-**Read the per-control differences, not the best-of.** Against each control separately: **−0.5%**
-(sd 2.1) versus the shuffle and **+0.7%** (sd 1.7) versus the random graph. Intact led the best
-control on **0 of 5** seeds. The `best control` column is a `max()` over two noisy arms, so it is
-biased against `intact` and "intact is 1.4 points behind it" is not evidence that the real wiring is
-worse. What is established is that the specific wiring does not measurably matter, and that a
-recurrent graph is **required**: `no_edges` sits at 21.6%, below the 26.8% baseline, while every
-connected arm reaches the high eighties.
-
-Note the final-epoch column: it is 6–9 points below the run's own level, every time. A single epoch is
-not a measurement, which is why the score is a tail mean.
-
-An earlier version of this table reported 94.8 / 92.0 / 95.1 / 21.6 with a "94.7% ceiling". Those
-figures came from the accelerated path **before** a defect in it was found: a `cupyx` sparse matvec
-canonicalised the uploaded control matrix in place, merging 31,231 duplicate `(row, column)` pairs
-and renumbering every entry after each merge, while the trainer wrote weights by position. The
-accelerator therefore trained a matrix the CPU never had — it agreed to 3e-07 on an untrained brain
-and diverged by 6.0e-01 after six plasticity steps. The numbers above were measured after the fix, on
-a path that is now gated before any figure is read, and all 20 checkpoints were re-loaded on a
-different machine and recomputed from scratch (20/20 exact).
-
-That is the standard reservoir-computing result: a rich fixed recurrent structure gives a useful
-feature space, and the specific wiring is not what carries the information.
-
-**Two earlier claims in this project were false and are corrected here.** An equal-weight mean
-read-out produced intact +34.0% / shuffled +4.1% / random -5.2% and was reported as "the wiring
-matters" — the read-out was the bottleneck, and a control comparison run through an inadequate
-read-out measures the read-out. A later 15-epoch run produced a second "wiring matters" verdict
-from one lucky epoch. Both are documented in `brain/NOTES_does_the_wiring_matter.md`, along with
-the rule that came out of them: report an average over epochs, vary the seed, and compare the
-effect against the seed-to-seed spread before claiming anything.
-
-Compute: the recurrence runs on the GPU, **26x** faster here (5.2 ms per six-step settle against
-136 ms, the sparse product being memory-bandwidth-bound at 1.6 G nnz/s on one core and 41.7 G
-nnz/s on the device). Pinned by `brain/tests/test_gpu_matvec.py`.
+Built with the help of an AI agent. Every number in this file came from a command that ran, and the scripts that produced them are in `tools/` and `brain/scripts/`.

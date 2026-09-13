@@ -1,4 +1,4 @@
-# FlyLingo — frozen interface contract
+# FlyLingo, frozen interface contract
 
 Everyone building in this repo codes against this file. Do not change a signature here
 without saying so in your final report; other workstreams are running against it.
@@ -14,7 +14,7 @@ streaming live while this happens.
 
 The honest description, which every user-facing surface must respect: the fly does not
 understand Spanish. Measured fly wiring supplies fixed dynamics; a small trained readout
-reads them out. The point of the project is the **control experiment** — does the measured
+reads them out. The point of the project is the **control experiment**, does the measured
 connectome beat a shuffled, edge-free, or random graph of identical size and sparsity at
 matched parameters on the same task? Almost nobody in the September 2026 wave ran that
 comparison. We do.
@@ -38,9 +38,9 @@ D:\Projects\flylingo\
 
 `cache\malecns_v1\` holds the exact arrays `flm\scripts\prepare_graph.py` writes:
 
-- `ids.npy` — int64, sorted ascending, exactly 166,700 entries. Neuron body IDs.
-- `data.npy` `indices.npy` `indptr.npy` — scipy CSR, shape (166700, 166700).
-- `manifest.json` — counts plus sha256 of every `.npy`.
+- `ids.npy`, int64, sorted ascending, exactly 166,700 entries. Neuron body IDs.
+- `data.npy` `indices.npy` `indptr.npy`, scipy CSR, shape (166700, 166700).
+- `manifest.json`, counts plus sha256 of every `.npy`.
 
 Orientation: **row = postsynaptic, column = presynaptic**. `W[post, pre]` is contact count
 divided by that neuron's total incoming contacts, so rows sum to 1. Edges are unsigned;
@@ -222,15 +222,15 @@ Service runs on `http://127.0.0.1:8770`.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/health` | — | `{status, neurons, edges, dataset, checkpoint, uptime_s}` |
-| GET | `/curriculum` | — | the curriculum JSON |
-| GET | `/stats` | — | `{lessons_completed, accuracy, accuracy_by_difficulty, learning_curve[], controls{}}` |
+| GET | `/health` |, | `{status, neurons, edges, dataset, checkpoint, uptime_s}` |
+| GET | `/curriculum` |, | the curriculum JSON |
+| GET | `/stats` |, | `{lessons_completed, accuracy, accuracy_by_difficulty, learning_curve[], controls{}}` |
 | POST | `/session` | `{}` | `{session_id, lesson_id, challenge}` |
 | POST | `/answer` | `{session_id, challenge_id, choice_index}` | see AnswerResult |
 | POST | `/control` | `{mode}` | `{mode, note}` |
 | POST | `/reset` | `{}` | `{ok}` |
-| GET | `/telemetry` | — | one `BrainFrame`, current state |
-| WS | `/stream` | — | `BrainFrame` at 20 Hz |
+| GET | `/telemetry` |, | one `BrainFrame`, current state |
+| WS | `/stream` |, | `BrainFrame` at 20 Hz |
 
 `challenge` is the current challenge object in curriculum form, with `options` already
 ordered for display.

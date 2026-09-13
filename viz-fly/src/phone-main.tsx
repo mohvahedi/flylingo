@@ -149,7 +149,7 @@ function Viewer() {
         </div>
         <div style={{ color: '#74828F', marginTop: 4 }}>
           rects: {rects.length} · card {flyChoice + 1} centre{' '}
-          {rects[flyChoice] ? `${Math.round(rects[flyChoice].cx)},${Math.round(rects[flyChoice].cy)}` : '—'}
+          {rects[flyChoice] ? `${Math.round(rects[flyChoice].cx)},${Math.round(rects[flyChoice].cy)}` : ', '}
         </div>
       </div>
     </div>
