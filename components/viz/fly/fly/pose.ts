@@ -8,7 +8,9 @@
  * Frame convention: the fly faces +Z, up is +Y, right is +X. Ground plane is y = 0.
  */
 
-export type Behavior = 'idle' | 'walk' | 'groom' | 'proboscis' | 'startle';
+import { REACH, reachCurve } from './reach';
+
+export type Behavior = 'idle' | 'walk' | 'groom' | 'proboscis' | 'startle' | 'reach';
 
 export type ReactionKind = 'none' | 'celebrate' | 'recoil';
 
@@ -227,6 +229,8 @@ export function computePose(
   behavior: Behavior,
   blend: number,
   react: ReactState,
+  /** seconds the current behavior has been running; drives the one-shot behaviors */
+  age = 0,
 ): Pose {
   const b = blend < 0 ? 0 : blend > 1 ? 1 : blend;
   const breath = Math.sin(t * 2.1);
@@ -341,6 +345,37 @@ export function computePose(
     pose.antR.yaw += 0.3 * b;
     pose.wingL.flap += 0.06 * b;
     pose.wingR.flap += 0.06 * b;
+  } else if (behavior === 'reach' && b > 0) {
+    // The answer has been picked: the fly leans onto the card and puts its two forelegs down
+    // on it. The legs extend first, then press while the body comes toward the glass; the
+    // whole lean-and-settle is one envelope so the legs and the body cannot disagree.
+    const rc = reachCurve(age);
+    const on = rc.on * b;
+    if (on > 0) {
+      const press = 1 + REACH.tap * rc.tap;
+      pose.bodyPitch += REACH.bodyPitch * on;
+      pose.bodyRoll += REACH.bodyRoll * on;
+      pose.headPitch += REACH.headPitch * on;
+      pose.bodyY += -0.02 * on;
+      for (const i of [0, 3]) {
+        const l = pose.legs[i];
+        const side = legSide(i);
+        l.femur += REACH.femur * on * press;
+        l.knee += REACH.knee * on * press;
+        l.tarsus += REACH.tarsus * on * press;
+        // -side * x moves both forelegs the same way, which is how groom wipes with both
+        l.hipYaw += -side * REACH.hipYaw * on;
+        l.hipRoll += -side * REACH.hipRoll * on;
+      }
+      // the standing four brace and take the weight as the body comes forward
+      for (const i of [1, 2, 4, 5]) {
+        const l = pose.legs[i];
+        l.knee += 0.12 * on;
+        l.femur += -0.05 * on;
+      }
+      pose.antL.pitch += -0.3 * on;
+      pose.antR.pitch += -0.3 * on;
+    }
   } else if (behavior === 'proboscis' && b > 0) {
     // probe: head down, proboscis out and swinging side to side
     const ext = Math.min(1, b) * (0.85 + 0.15 * Math.sin(t * 1.6));
