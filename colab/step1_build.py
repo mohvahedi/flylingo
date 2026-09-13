@@ -351,7 +351,7 @@ def accuracy_agreement(epochs: int = 3) -> dict:
     sys.path.insert(0, str(ROOT))
     from brain.encoders import encode_text
     from brain.plastic_brain import PlasticBrain
-    from brain.reservoir import FlyReservoir
+    from brain.reservoir import FlyReservoir, load_connectome
 
     connectome = load_connectome(str(GRAPH))
     cur = json.loads((ROOT / "brain/curriculum/es-en.json").read_text(encoding="utf-8"))
@@ -365,6 +365,7 @@ def accuracy_agreement(epochs: int = 3) -> dict:
         X = np.load(X_path)
     else:
         X = np.stack([encode_text(p) for p, _ in items])
+        X_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(X_path, X)
     assert X.shape[0] == len(ys)
 
