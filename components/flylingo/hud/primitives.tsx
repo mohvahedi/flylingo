@@ -122,13 +122,19 @@ export function Label({
   );
 }
 
-/** Panel with a hairline border and an optional wide-tracked label in its corner. */
+/**
+ * Panel with a hairline border and an optional wide-tracked label in its corner.
+ *
+ * `pad` insets the header and the body together; `bodyPad` overrides the body alone, so a
+ * rendered scene can run full-bleed under a header that keeps the frame's inset.
+ */
 export function Panel({
   label,
   right,
   children,
   grow,
   pad = 14,
+  bodyPad,
   glow = false,
   height,
 }: {
@@ -137,6 +143,7 @@ export function Panel({
   children: React.ReactNode;
   grow?: boolean;
   pad?: number;
+  bodyPad?: number;
   glow?: boolean;
   height?: number;
 }) {
@@ -171,7 +178,7 @@ export function Panel({
           {right}
         </header>
       )}
-      <div style={{ flex: "1 1 auto", minHeight: 0, padding: pad }}>{children}</div>
+      <div style={{ flex: "1 1 auto", minHeight: 0, padding: bodyPad ?? pad }}>{children}</div>
     </section>
   );
 }
@@ -285,6 +292,13 @@ export function Chip({
  *
  * Measuring instead of guessing means the canvas always matches its box, and it cannot drift
  * again when the surrounding layout changes.
+ *
+ * The box is also a positioned ancestor. A WebGL child that fills itself with `position:
+ * absolute; inset: 0` otherwise resolves against the panel's padding box, because nothing
+ * between the two is positioned. The specimen scene did exactly that: it drew over its own
+ * panel header, so the label and the attribution line vanished under the render, and, with the
+ * drawing buffer no longer matching its CSS box, the browser stretched the frame (a 728x358 CSS
+ * box for a 700x295 buffer, ~21% of vertical stretch) and squashed the handset.
  */
 export function FitBox({
   children,
@@ -318,7 +332,16 @@ export function FitBox({
   }, [minHeight]);
 
   return (
-    <div ref={ref} style={{ width: "100%", height: "100%", minHeight: 0, overflow: "hidden" }}>
+    <div
+      ref={ref}
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        minHeight: 0,
+        overflow: "hidden",
+      }}
+    >
       {size.width > 0 ? children(size) : null}
     </div>
   );

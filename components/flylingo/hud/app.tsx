@@ -229,10 +229,18 @@ export function HudApp() {
           }}
         >
           {/* left column: specimen over connectome */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 18, minHeight: 0 }}>
+          {/* One gap value for the whole frame: the column used to sit on 18px against 20px
+              everywhere else, which is the kind of 2px mismatch that makes a grid look
+              accidental rather than composed. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 20, minHeight: 0 }}>
+            {/* The scene runs full-bleed: the header keeps the frame's 14px inset, the render
+                goes to the panel edges, so the wide shot is not inset twice. The label is the
+                specimen alone, which leaves the header room for the whole attribution line --
+                with the longer label that line ran 133px past the panel edge and was clipped. */}
             <Panel
               grow
-              label="specimen · lesson on screen"
+              bodyPad={0}
+              label="specimen"
               right={
                 <Label tone="faint">
                   fly.glb · victorberdugo1 (CC-BY-4.0) · handset by peroroo (CC-BY-SA-4.0)
@@ -261,7 +269,7 @@ export function HudApp() {
             </Panel>
 
             <Panel
-              height={352}
+              height={330}
               glow
               label="connectome · activity pulses"
               right={
@@ -301,9 +309,26 @@ export function HudApp() {
                   </FitBox>
                 </div>
                 <div style={{ flex: "0 0 auto" }}>
-                  <Label tone="faint" size={10.5}>
-                    male cns v1.0 · measured connectome · brain and ventral nerve cord
-                  </Label>
+                  {/* Key and provenance share a row: as three stacked lines this caption left
+                      a 23px band of dead space under the cloud and cost the specimen panel the
+                      same height, which it needs more than this panel does. */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 16,
+                    }}
+                  >
+                    <Label tone="faint" size={10.5}>
+                      male cns v1.0 · measured connectome
+                    </Label>
+                    <div style={{ display: "flex", gap: 18 }}>
+                      <LegendDot swatch={HUD.cyan}>measured soma</LegendDot>
+                      <LegendDot swatch="rgba(91,200,214,0.42)">centroid fill</LegendDot>
+                      <LegendDot swatch={HUD.amber}>fresh spike</LegendDot>
+                    </div>
+                  </div>
                   <div
                     style={{
                       marginTop: 5,
@@ -314,11 +339,6 @@ export function HudApp() {
                     }}
                   >
                     166,700 neurons · 25,582,938 directed edges · 139,668 distinct soma positions
-                  </div>
-                  <div style={{ marginTop: 9, display: "flex", gap: 20, flexWrap: "wrap" }}>
-                    <LegendDot swatch={HUD.cyan}>measured soma</LegendDot>
-                    <LegendDot swatch="rgba(91,200,214,0.42)">centroid fill</LegendDot>
-                    <LegendDot swatch={HUD.amber}>fresh spike</LegendDot>
                   </div>
                 </div>
               </div>
@@ -420,13 +440,18 @@ export function HudApp() {
           }}
         >
           <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
+            {/* The headline is the frame's status line, not its title. At 44px it outranked the
+                lesson prompt (38px) that the viewer actually has to read, so the eye landed on
+                a restatement instead of the question. 36px keeps the sting of Correct / Not
+                yet and lets the prompt lead; 1.15 also clears the descender, which overflowed
+                the old 1.05 line box by 4px. */}
             <h2
               style={{
                 margin: 0,
-                fontSize: 44,
+                fontSize: 36,
                 fontWeight: 700,
                 letterSpacing: "-0.02em",
-                lineHeight: 1.05,
+                lineHeight: 1.15,
                 color:
                   status === "correct" ? HUD.green : status === "wrong" ? HUD.rose : HUD.text,
               }}
@@ -478,9 +503,39 @@ export function HudApp() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 34 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <Label tone="faint">state rms</Label>
-              <Spark values={rmsHistory} width={150} height={40} tone={HUD.cyan} />
+            {/* One instrument, not two. The trace used to sit in its own group labelled "state
+                rms" while a stat cell in the row beside it carried the same label and the same
+                value, so the tier read as two competing readouts. The trace and its number now
+                share a cell whose label matches the rest of the row (9.5px) and whose height
+                matches theirs (line box + 2 + 35), so the labels stay on one line. The wrapper
+                is a plain block on purpose: as a flex column it would blockify the label and
+                drop its baseline 5px below the row's. */}
+            <div>
+              <Label tone="faint" size={9.5}>
+                state rms
+              </Label>
+              <div
+                style={{
+                  marginTop: 2,
+                  height: 35,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                }}
+              >
+                <Spark values={rmsHistory} width={170} height={35} tone={HUD.cyan} />
+                <div
+                  style={{
+                    fontSize: 26,
+                    fontWeight: 700,
+                    letterSpacing: "-0.01em",
+                    lineHeight: 1.15,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {frame ? frame.state_rms.toFixed(3) : "0.000"}
+                </div>
+              </div>
             </div>
             <div style={{ display: "flex", gap: 30 }}>
               <Stat
@@ -494,11 +549,6 @@ export function HudApp() {
                 label="spikes"
                 value={frame ? `${frame.spikes.length}` : "0"}
                 tone="cyan"
-              />
-              <Stat
-                label="state rms"
-                value={frame ? frame.state_rms.toFixed(3) : "0.000"}
-                size={26}
               />
               <Stat
                 label="readout"
