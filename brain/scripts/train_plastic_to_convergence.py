@@ -26,6 +26,22 @@ from brain.reservoir import FlyReservoir, load_connectome  # noqa: E402
 MAX_EPOCHS = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 PATIENCE = 8  # stop after this many epochs with no new best
 
+
+def _maybe_gpu(reservoir, label=""):
+    """Route the recurrence to the GPU when there is one, and say so either way.
+
+    The run is dominated by the sparse matrix-vector product, and on this machine that is 26x
+    faster on the GPU: 5.2 ms per six-step settle against 136 ms. A converged run takes roughly
+    45 minutes on the CPU and under two on the GPU. Enabling it is optional and reported, so a
+    log always states which device produced the numbers.
+    """
+    info = reservoir.enable_gpu()
+    if info.get("enabled"):
+        print(f"device: GPU {info['device']}  ({label or 'recurrence on device'})")
+    else:
+        print(f"device: CPU  ({info.get('reason', 'gpu not enabled')})")
+    return info.get("enabled", False)
+
 cur = json.load(open("brain/curriculum/es-en.json", encoding="utf-8"))
 items = [
     (c["prompt"], int(c["correctIndex"]))
@@ -38,6 +54,7 @@ y = np.array([t for _, t in items], dtype=int)
 chance = float(np.bincount(y).max() / len(y))
 
 r = FlyReservoir(load_connectome(), embedding_dim=256, dims=128, seed=7301)
+_maybe_gpu(r)
 pb = PlasticBrain(r, n_pools=4, pool_size=200, seed=99, steps=6, lr=0.01)
 pb.set_mode("intact")
 
