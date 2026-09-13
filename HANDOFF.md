@@ -79,9 +79,82 @@ Nested repo (`duolingo-clone/`): `5b0debc`, `d2cf020`, `2eeba12`, `5f2622f`.
 
 ---
 
-## 3. THE OPEN PROBLEM — start here
+## 3. THE OPEN PROBLEM — RESOLVED 2026-09-13 (attempt 5)
 
-**The measurement is broken and I do not trust any GPU number.**
+**It was (a) A BUG, in the accelerated path, and it is fixed and pinned by a test.**
+
+One commit-summary line, then the history below is kept because the reasoning still applies:
+
+> `Reservoir._build_gpu_mirror` now declares the uploaded mirror `has_canonical_format = True`
+> and refuses an upload whose stored-entry count or index pointers differ from the CPU matrix's.
+> A cupyx sparse matvec was canonicalising the non-canonical control matrix **in place**,
+> merging its 31,231 duplicate (row, column) pairs and renumbering every entry after each merge.
+> `gpu_sync_data` writes trained weights **by position**, so from the first matvec onward the
+> accelerator trained a matrix the CPU never had.
+
+**How it was found, in the order it actually happened** (`brain/scripts/` has each step):
+
+| step | script | what it settled |
+|---|---|---|
+| 1 | `diagnose_trained_sensitivity.py` | CPU→CPU reload exact; perturbing every trained weight by 1e-4 moves accuracy by **0.0 points**; relative top-2 margin 1.19 with 1% of prompts near a tie. **Trained system is not ill-conditioned, so this is not sensitivity → (a).** |
+| 2 | `diagnose_gpu_stepwise.py` | First probe said all modes agreed — but it **re-implemented** the recurrence, so it tested a reading of the code, not the code. Kept only as a record of that mistake. |
+| 3 | `diagnose_gpu_divergence.py` | Using the **shipped** `settle`, the mirror's stored-entry count came back **25,551,707 against the CPU's 25,582,938** — a shape error that named the mechanism. |
+| 4 | `confirm_gpu_mirror_layout.py`, `probe_mirror_layout.py`, `instrument_mirror_stages.py`, `instrument_mirror_calls.py` | Localised it: the control matrix has **31,231 duplicate pairs**, the connectome has **0**, the constructor preserves the count, and the change happens on the **first matvec**. |
+| 5 | `prove_matvec_reindex.py` | One matvec: 25,582,938 → 25,551,707, short by exactly 31,231, **product unchanged** (5.4e-07). With `has_canonical_format = True`: **layout preserved, indptr matches, same product.** |
+
+Three hypotheses were tested and **refuted** before the real one: the cupyx constructor
+preserving the count, `.tocsr()` returning a new object, and `mirror.data[idx] = …`
+canonicalising. Each was a plausible story that a measurement killed.
+
+**Why the existing tests could not catch it** — both gaps are now closed:
+
+- `test_gpu_matvec_matches_cpu` runs **no plasticity at all**.
+- `test_gpu_plasticity_matches_cpu` ran **only the default mode**, whose matrix has zero
+  duplicate pairs and therefore nothing to collapse. It now loops every mode and additionally
+  checks the mirror carries its own device's weights at the plastic positions, exactly.
+- New: `test_gpu_mirror_keeps_the_cpu_layout_per_mode` — asserts entry count, index pointers and
+  data per mode, after a settle. **Proven red on the old code** (reverting the one line reproduces
+  `25551707 == 25582938` naming `random_graph`) and green with the fix.
+
+**The equivalence gate now passes on an independent machine.** `colab/step1_build.py` rebuilds
+the connectome from the public bucket (sha256 verified, 166,700 / 25,582,938 / 124,177,617
+asserted) and then gates the accelerator before any number is read:
+
+```
+intact        fresh 2.725e-07  layout ok  placement 0.00e+00  | drift: settle 5.40e-03 scales 2.83e-05  PASS
+shuffled      fresh 2.794e-07  layout ok  placement 0.00e+00  | drift: settle 1.34e-02 scales 1.84e-04  PASS
+random_graph  fresh 3.881e-07  layout ok  placement 0.00e+00  | drift: settle 1.92e-04 scales 3.84e-04  PASS
+no_edges      fresh 0.000e+00  layout ok  placement 0.00e+00  | drift: settle 0.00e+00 scales 0.00e+00  PASS
+```
+
+Before the fix the same gate read `intact 5.398e-03 / shuffled 1.341e-02 / random_graph 6.012e-01`.
+
+**Two kinds of difference, now kept apart.** The mirror is **exact** (placement 0.0). The
+remaining cross-device figures are **float32 training drift**, not a defect: a training loop feeds
+each step's summation-order difference back into the weights, which is why it is 1e-3-ish rather
+than the 1e-7 of a single settle. The gate therefore **gates** the exact invariants (fresh
+agreement, layout, placement) and **reports** the drift, rather than papering over both with one
+tolerance. 159 tests pass.
+
+**What this does to §7's "not solid" list, as of now:**
+
+- The 94.7% ceiling and 92.8% final: **re-measurable on the GPU**, but not yet re-measured. Still
+  do not report them.
+- The 26× speedup: measured on this path; the layout bug did not affect a matvec's arithmetic, so
+  the figure stands, but re-verify alongside the accuracy.
+- The wiring comparison: **still not answered.** The bug was one reason it kept failing; the other
+  reasons (attempts 1-3) were separate and also real. The four-arm run needs re-running on the
+  fixed path before anything is claimed.
+- Replicated: the divergence is device-independent — a local 3070 Ti and a Colab T4 both showed
+  it, with the same per-mode ordering.
+
+**What is still owed:** the four-arm measurement on the fixed path (`colab/step2_measure.py`,
+multi-seed, paired, saves checkpoints and recomputes every reported number from them). Its Colab
+blocker is recorded in §4.
+
+### The history — attempts 1 to 4
+
+**The measurement was broken and I did not trust any GPU number.**
 
 The four-arm control comparison (does the real connectome beat shuffled / random / no-edges?) has
 now failed **four times, each for a different reason**. Every failure was found late. Attempts:
@@ -118,28 +191,49 @@ Two candidate explanations, and they need different remedies:
   six recurrent steps, so each device is internally consistent but the two cannot be compared on
   trained weights. Nothing is wrong with either path.
 
-### The very next step
+### The very next step — DONE, see the resolution at the top of §3
 
-`brain/scripts/diagnose_trained_sensitivity.py` was written to **distinguish (a) from (b)** and its
-run was interrupted before it printed anything. It is CPU-only, so it is silent and safe. Run it:
+`brain/scripts/diagnose_trained_sensitivity.py` ran and answered its three questions: reload is
+exact, a 1e-4 perturbation moves accuracy by zero, and decisions are not near ties. That ruled out
+sensitivity and sent the search to the accelerator, where `prove_matvec_reindex.py` found the
+in-place canonicalisation. The full chain is in the table at the top of §3.
 
-```bash
-cd D:/Projects/flylingo/brain
-.venv/Scripts/python.exe scripts/diagnose_trained_sensitivity.py
-```
+The next step now is **§4's first item**: the four-arm measurement on the fixed path.
 
-It answers three things, all on CPU:
+---
 
-1. **CPU → CPU reload exact?** If not, the save/load code is broken and nothing else matters.
-2. **The perturbation test.** Multiply trained weights by `(1 + eps)` for eps in 0, 1e-7 … 1e-4 and
-   re-score. If eps=1e-6 moves accuracy by many points, the trained system is ill-conditioned →
-   **(b)**, a numerical-sensitivity finding. If a 1e-6 perturbation changes nothing while the GPU
-   still disagrees → **(a)**, a real bug in the accelerator.
-3. **How close are decisions to ties?** The top-2 pool margin relative to the pool-score scale.
-   If margins are tiny, decisions are knife-edge and this is (b).
+## 3b. Colab: what works, and the one blocker
 
-**Only after that** should any further experiment be run, and **only on CPU or on Colab** — see
-the constraint in §5.
+`colab/step1_build.py` and `colab/step2_measure.py` are written and step 1 has been run end to end
+on a T4. `tools/gen_payload.py` embeds the three modules plus the curriculum (with digests) so the
+VM needs no clone, and `tools/colab_mcp_bridge.py` drives googlecolab/colab-mcp over stdio.
+
+- **The browser MCP route is a dead end here.** Colab's page never made a TCP connection to the
+  local websocket server: with connection-level logging added, the server logged the proxy URL it
+  opened and then no request at all, from either `colab.research.google.com` or `colab.google.com`.
+  The CLI route works instead.
+- **The CLI must run on Windows, not WSL.** Everything is pinned in `./run_colab.sh`'s equivalent:
+  a venv at `~/.local/colab-cli-venv` with `google-colab-cli` **and `jupyter-kernel-client<1`**
+  (1.0.2 renamed `KernelClient` to `JupyterKernelClient` and the CLI breaks on it), plus `termios.py`
+  and `tty.py` stubs in its site-packages because `colab_cli.console` imports them at module scope.
+  WSL also failed `uv` installs with `os error 12` despite 25 GB free.
+- **`colab exec` on a long script times out client-side** ("Timeout waiting for output") while the
+  VM keeps working. Launch detached with `nohup <sys.executable> -u script.py > log 2>&1 &` through
+  a short `colab exec`, then poll the log. `sys.executable` in the kernel is `/usr/bin/python3`,
+  which has cupy 14.0.1 and pyarrow already.
+- **BLOCKER: the T4 slot is held by an orphan assignment.** `colab sessions` reports
+  `[?] gpu-t4-s-kkb-ass1c2-2illcv5vb8gzj`, with no local record, so the CLI cannot unassign it and
+  `colab new --gpu T4` fails `TooManyAssignmentsError`. A CPU session allocates fine, which is the
+  giveaway that it is the GPU slot specifically. Direct calls to
+  `/tun/m/unassign/<vm>` return 400 without the CLI's headers. Resolutions, in order of effort:
+  1. Open Colab, use *Manage sessions*, and terminate the T4 runtime by hand, then re-run
+     `colab new -s fly --gpu T4`.
+  2. Let it time out (the VM is idle, and an unused assignment is reclaimed) and retry later.
+  3. Run `colab/step2_measure.py` on any other GPU machine — it needs only a GPU and network, and
+     it rebuilds the connectome itself.
+
+Note the account is `vmoh80s@gmail.com` and the token lives at `~/.config/colab-cli/token.json`
+(mirrored into Windows so the Windows CLI can read it).
 
 ---
 

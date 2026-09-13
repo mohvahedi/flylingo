@@ -340,7 +340,34 @@ class FlyReservoir:
         return self.state.copy(), feat.get()
 
     def _build_gpu_mirror(self, key: str):
-        """Upload one matrix to the GPU, or reuse the mirror already there."""
+        """Upload one matrix to the GPU, or reuse the mirror already there.
+
+        THE LAYOUT MUST SURVIVE THE UPLOAD. The plastic edge positions are captured as indices
+        into the CPU matrix's CSR data array, and `gpu_sync_data` writes trained weights by
+        those positions, so the GPU copy has to keep the CPU's exact layout. It did not:
+
+        cupyx's sparse matvec canonicalises a matrix whose `has_canonical_format` is False, IN
+        PLACE, summing duplicate (row, column) pairs and rewriting the index pointers. The
+        random control is built with duplicates on purpose -- it reuses the connectome's indptr
+        and nnz so one set of plastic positions addresses the same synapse rank in either
+        wiring, and its randomized partners collide 31,231 times -- so the first matvec after
+        an upload silently collapsed it from 25,582,938 stored entries to 25,551,707 and moved
+        every entry after each merge. From then on `gpu_sync_data` wrote the trained weights
+        into the wrong entries and the two devices trained different matrices.
+
+        Measured before the fix, six plasticity steps in: the settled state disagreed with the
+        CPU by 6.0e-01 on a state of scale ~0.8 in the random control, 1.3e-02 under the
+        shuffle, while a fresh untrained reservoir agreed to ~3e-07. That is why
+        `test_gpu_matvec_matches_cpu` passed -- it tests no plasticity -- and why
+        `test_gpu_plasticity_matches_cpu` passed too: it only exercises the default mode, whose
+        matrix has zero duplicate pairs and therefore nothing to collapse.
+
+        Declaring the format canonical is safe rather than a bypass: duplicate entries in the
+        same row and column add in a matvec, so the product is identical either way. Verified
+        numerically -- the same product to 5.4e-07 with the layout intact, and the same product
+        with it collapsed. The layout is what carries meaning here, so the layout is what is
+        preserved, and the equality is asserted rather than assumed.
+        """
         if key in self._gmirror:
             return self._gmirror[key]
         cp = self._cp
@@ -354,6 +381,16 @@ class FlyReservoir:
             (cp.asarray(src.data), cp.asarray(src.indices), cp.asarray(src.indptr)),
             shape=src.shape,
         )
+        # Keep the CPU's layout: stop cupyx re-canonicalising the matrix under the caller.
+        m.has_canonical_format = True
+        if int(m.nnz) != int(src.nnz) or not np.array_equal(
+            m.indptr.get(), src.indptr
+        ):
+            raise RuntimeError(
+                f"the GPU mirror for {key!r} does not reproduce the CPU matrix's layout "
+                f"({int(m.nnz)} stored entries against {int(src.nnz)}). Plastic edge "
+                "positions would address the wrong entries; refusing to use it."
+            )
         self._gmirror[key] = m
         return m
 

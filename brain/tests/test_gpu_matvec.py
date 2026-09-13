@@ -58,32 +58,106 @@ def test_gpu_matvec_matches_cpu(connectome):
 
 
 def test_gpu_plasticity_matches_cpu(connectome):
-    """The plastic weights must reach the GPU mirror, or training would use stale weights."""
+    """The plastic weights must reach the GPU mirror, or training would use stale weights.
+
+    EVERY mode, not just the default one. This test used to run only the default condition,
+    which is exactly the condition that cannot fail: the connectome matrix has zero duplicate
+    (row, column) pairs, so the layout-preservation bug below was invisible here. The control
+    that exposed it is the one whose matrix has 31,231 duplicate pairs.
+    """
     emb = np.random.default_rng(12).standard_normal(256).astype(np.float32)
 
-    cpu = FlyReservoir(connectome, seed=7301)
-    gpu = FlyReservoir(connectome, seed=7301)
-    gpu.enable_gpu()
-
     rng = np.random.default_rng(99)
-    pool_of_row = np.full(cpu.n, -1, dtype=np.int64)
-    sel = rng.permutation(cpu.n)[:800]
-    for k in range(4):
-        pool_of_row[sel[k * 200 : (k + 1) * 200]] = k
+    for mode in MODES:
+        cpu = FlyReservoir(connectome, seed=7301)
+        gpu = FlyReservoir(connectome, seed=7301)
+        cpu.set_mode(mode)
+        gpu.set_mode(mode)
+        gpu.enable_gpu()
 
-    cpu.enable_plasticity(pool_of_row, max_edges=20_000)
-    gpu.enable_plasticity(pool_of_row, max_edges=20_000)
+        pool_of_row = np.full(cpu.n, -1, dtype=np.int64)
+        sel = rng.permutation(cpu.n)[:800]
+        for k in range(4):
+            pool_of_row[sel[k * 200 : (k + 1) * 200]] = k
 
-    # change the scales on both, identically
-    scales = 1.0 + 0.5 * np.random.default_rng(7).random(cpu.plastic_scale.size).astype(np.float32)
-    cpu.plastic_scale[:] = scales
-    gpu.plastic_scale[:] = scales
-    cpu.apply_plastic()
-    gpu.apply_plastic()
+        cpu.enable_plasticity(pool_of_row, max_edges=20_000)
+        gpu.enable_plasticity(pool_of_row, max_edges=20_000)
 
-    cs, _ = _settled(cpu, emb)
-    gs, _ = _settled(gpu, emb)
-    assert np.allclose(cs, gs, atol=TOL), "plasticity did not reach the GPU mirror"
+        # change the scales on both, identically
+        scales = 1.0 + 0.5 * np.random.default_rng(7).random(
+            cpu.plastic_scale.size
+        ).astype(np.float32)
+        cpu.plastic_scale[:] = scales
+        gpu.plastic_scale[:] = scales
+        cpu.apply_plastic()
+        gpu.apply_plastic()
+
+        cs, _ = _settled(cpu, emb)
+        gs, _ = _settled(gpu, emb)
+        assert np.allclose(cs, gs, atol=TOL), f"{mode}: plasticity did not reach the mirror"
+
+        # The settled states agreeing is necessary but not sufficient, and the comparison has to
+        # be against the mirror's OWN device: comparing across devices would fold the float32
+        # training drift into a check that is supposed to be about placement.
+        if mode == "random_graph":
+            src, key = gpu._random_graph, "random"
+        else:
+            src, key = gpu.graph, "graph"
+        mirror = gpu._gmirror.get(key)
+        assert mirror is not None, f"{mode}: no {key} mirror was built"
+        pos = gpu.plastic_pos
+        assert np.array_equal(mirror.indptr.get(), src.indptr), (
+            f"{mode}: the mirror's layout differs from its own matrix's"
+        )
+        assert np.allclose(
+            cupy.asnumpy(mirror.data)[pos], src.data[pos], rtol=0, atol=0
+        ), f"{mode}: the mirror does not carry its own device's trained weights"
+
+
+def test_gpu_mirror_keeps_the_cpu_layout_per_mode(connectome):
+    """A sparse matvec must not reindex the uploaded matrix, in any mode.
+
+    THE DEFECT THIS PINS. Plastic edge positions are captured as indices into the CPU matrix's
+    CSR data array, and `gpu_sync_data` writes trained weights by those positions. cupyx's
+    sparse matvec canonicalises a matrix whose `has_canonical_format` is False, in place:
+    it merged the random control's 31,231 duplicate (row, column) pairs, collapsing the mirror
+    from 25,582,938 stored entries to 25,551,707 and moving every entry after each merge. Every
+    later position-based write then landed on a different synapse than the CPU's.
+
+    Measured on the real training sequence with the bug present, six plasticity steps in, the
+    settled state disagreed with the CPU by 6.0e-01 in the random control (state scale ~0.8)
+    and 1.3e-02 under the shuffle, against ~3e-07 for a fresh reservoir. A matvec is the
+    operation that triggers it, so a matvec is what this test runs first.
+    """
+    emb = np.random.default_rng(14).standard_normal(256).astype(np.float32)
+
+    for mode in MODES:
+        cpu = FlyReservoir(connectome, seed=7301)
+        gpu = FlyReservoir(connectome, seed=7301)
+        cpu.set_mode(mode)
+        gpu.set_mode(mode)
+        gpu.enable_gpu()
+
+        if mode == "random_graph":
+            src, key = cpu.random_graph(), "random"
+        else:
+            src, key = cpu.graph, "graph"
+
+        # a settle is what used to reindex the mirror, before any plasticity
+        _settled(gpu, emb)
+
+        mirror = gpu._gmirror.get(key)
+        assert mirror is not None, f"{mode}: no {key} mirror was built"
+        assert int(mirror.nnz) == int(src.nnz), (
+            f"{mode}: the mirror holds {int(mirror.nnz)} stored entries against the CPU's "
+            f"{int(src.nnz)} -- the upload changed the layout plastic positions refer to"
+        )
+        assert np.array_equal(mirror.indptr.get(), src.indptr), (
+            f"{mode}: the mirror's row pointers differ from the CPU matrix's"
+        )
+        assert np.allclose(
+            cupy.asnumpy(mirror.data), src.data, rtol=0, atol=1e-6
+        ), f"{mode}: the mirror does not hold the CPU matrix's weights"
 
 
 def test_gpu_is_faster(connectome):
