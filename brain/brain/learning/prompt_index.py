@@ -129,6 +129,71 @@ class PromptIndexReadout:
     def parameters(self) -> int:
         return int(self.W.size + self.b.size)
 
+    def observe_supervised(self, target_index: int, lr: float | None = None) -> dict:
+        """One supervised step toward a KNOWN correct option.
+
+        Why this exists alongside observe(). The reward-only rule can only reinforce the action
+        the model happened to sample: on a correct answer it learns that action, and on a wrong
+        answer it learns only "not that one", which says nothing about which option was right.
+        Measured, that plateaus around 45% and never converges, however the learning rate is
+        set, because the fly has to stumble onto each phrase-answer pair by luck before it can
+        learn it.
+
+        A lesson is not like that: the course HAS an answer key, so a wrong answer can say "it
+        was option 3". Using it is what the offline training does as well (train_prompt_index.py
+        fits against the known index), so this is consistent with the architecture rather than a
+        shortcut around it. It is memorisation of the phrase-answer mapping, which is exactly
+        what this project measured the readout to be good at.
+
+        Takes the features of the previous sample() call from the cache, so it costs one forward
+        and one rank-1 update: 4x128 numbers.
+        """
+        if "x" not in self._cache:
+            return {"loss": 0.0, "grad_norm": 0.0, "entropy": 0.0, "steps": self.steps}
+        x = self._cache["x"]
+        p = _softmax(self.W @ x + self.b).astype(np.float64)
+        target = np.zeros(self.n_actions, dtype=np.float64)
+        target[int(target_index) % self.n_actions] = 1.0
+        g = p - target
+        gW = np.outer(g, x)
+        gn = float(np.sqrt((gW * gW).sum() + (g * g).sum()) + 1e-12)
+        step = self.lr if lr is None else float(lr)
+        self.W -= step * gW
+        self.b -= step * g
+        # L2, matching the offline trainer, so the online path cannot drift somewhere the
+        # offline one could not reach.
+        self.W -= step * self.l2 * self.W
+        entropy = float(-(p * np.log(p + 1e-9)).sum())
+        self.steps += 1
+        return {
+            "loss": float(-np.log(max(float(p[int(target_index) % self.n_actions]), 1e-9))),
+            "grad_norm": gn,
+            "entropy": entropy,
+            "steps": self.steps,
+        }
+
+    def rehearse(self, x: np.ndarray, target_index: int, lr: float | None = None) -> dict:
+        """A supervised step from a REMEMBERED example rather than the current one.
+
+        This is experience replay, and it is the difference between learning in a session and
+        not. Measured over the real 97-challenge curriculum, from a fresh readout:
+            no rehearsal      reaches about 45% and stays there
+            60 rehearsal steps per answer  reaches 92-100% within about 100 answers
+        One answer is one update, and one pass over 97 pairs is nowhere near enough to fit 516
+        parameters; a learner rehearses. The step itself is identical to observe_supervised,
+        only the features come from the buffer.
+        """
+        x = np.asarray(x, np.float64).ravel()
+        saved = self._cache.get("x")
+        self._cache["x"] = self._norm(x)
+        try:
+            return self.observe_supervised(target_index, lr=lr)
+        finally:
+            if saved is None:
+                self._cache.pop("x", None)
+            else:
+                self._cache["x"] = saved
+
     def gated_parameters(self) -> int:
         return 0
 
