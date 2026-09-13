@@ -342,7 +342,12 @@ export function HudLesson({
         </div>
         <button
           type="button"
-          disabled={pending || selected === undefined}
+          /* CHECK needs a selection, but NEXT and RETRY must always be pressable. Tying this to
+             `selected` alone disabled NEXT whenever nothing was selected -- which is exactly the
+             state after the fly answers, since the fly's own pick is shown in amber rather than
+             as a user selection. Pausing the demo on a correct answer left the panel stuck with
+             no way to advance. */
+          disabled={pending || (status === "none" && selected === undefined)}
           onClick={onCheck}
           style={{
             flex: "0 0 auto",
@@ -356,8 +361,11 @@ export function HudLesson({
             fontWeight: 800,
             letterSpacing: "0.14em",
             textTransform: "uppercase",
-            cursor: pending || selected === undefined ? "not-allowed" : "pointer",
-            opacity: pending || selected === undefined ? 0.45 : 1,
+            cursor:
+              pending || (status === "none" && selected === undefined)
+                ? "not-allowed"
+                : "pointer",
+            opacity: pending || (status === "none" && selected === undefined) ? 0.45 : 1,
           }}
         >
           {status === "none" ? "check" : status === "correct" ? "next" : "retry"}

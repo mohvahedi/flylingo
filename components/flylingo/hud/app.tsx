@@ -9,6 +9,7 @@ import { api, useBrainStream, useServiceHealth } from "@/lib/flylingo/api";
 import type { AnswerResult, ApiChallenge, Mode, SessionStart } from "@/lib/flylingo/types";
 
 import { HudLesson } from "./lesson";
+import { lessonOf, sound } from "./sound";
 import { HudTraining } from "./training";
 import { Chip, FitBox, HUD, HudStage, Label, LegendDot, Panel, Spark, Stat } from "./primitives";
 
@@ -83,6 +84,10 @@ export function HudApp() {
   const [autoDemo, setAutoDemo] = useState(true);
   /** Counts completed turns of the hands-off loop; the loop re-arms on each increment. */
   const [cycle, setCycle] = useState(0);
+  /** Sound is opt-in because browsers block audio until the page is interacted with, and the
+      click that turns it on is also the gesture that unlocks playback. */
+  const [soundOn, setSoundOn] = useState(false);
+  const [soundReady, setSoundReady] = useState(false);
   const [modeBusy, setModeBusy] = useState(false);
   const [trainBusy, setTrainBusy] = useState(false);
   const [rmsHistory, setRmsHistory] = useState<number[]>([]);
@@ -129,6 +134,34 @@ export function HudApp() {
   }, [start]);
 
   /**
+   * Sound. The module owns the state so the buttons and the engine cannot disagree; this mirrors
+   * it into React. `soundReady` reports whether playback was actually unlocked, so the control
+   * can say "click once for sound" rather than silently staying mute while someone records.
+   */
+  useEffect(() => {
+    const sync = () => {
+      setSoundOn(sound.enabled);
+      setSoundReady(sound.unlocked);
+    };
+    sync();
+    const off = sound.subscribe(sync);
+    // Browsers only allow audio after a real gesture, and the demo runs hands-off, so the first
+    // click or keypress anywhere unlocks playback. Enabling it is still the user's choice.
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onFirst = () => {
+      void (sound as any).unlock?.();
+    };
+    window.addEventListener("pointerdown", onFirst, { once: true });
+    window.addEventListener("keydown", onFirst, { once: true });
+    return () => {
+      off();
+      window.removeEventListener("pointerdown", onFirst);
+      window.removeEventListener("keydown", onFirst);
+    };
+  }, []);
+
+  /**
    * The current challenge, readable from inside the hands-off loop.
    *
    * The loop must not depend on `challenge` directly: it sets the challenge itself at the end of
@@ -167,6 +200,10 @@ export function HudApp() {
       setHearts(res.hearts);
       setAnswered((n) => n + 1);
       setHistory((h) => [...h, { user: res.correct, fly: res.fly_correct }]);
+      // The user's own answer drives the cue here; the fly may have picked differently.
+      const spanish = challenge.options[res.answer_index] ?? challenge.audio;
+      if (res.correct) sound.correctAnswer(spanish);
+      else sound.wrongAnswer(spanish);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "brain service did not respond");
     } finally {
@@ -228,10 +265,24 @@ export function HudApp() {
       // hands-off demo nobody picked. The fly's choice is drawn in amber from `flyChoice`, so
       // the two marks keep meaning what they say.
 
+      // Duolingo's own cue for the outcome, then the correct answer spoken in Spanish -- from
+      // the curriculum's `audio` field, which is set to exactly the right word for all 97
+      // challenges. Sounded after the state above so the ear and the screen agree.
+      const spanish = ch.options[res.answer_index] ?? ch.audio;
+      if (res.fly_correct) sound.correctAnswer(spanish);
+      else sound.wrongAnswer(spanish);
+
       await sleep(SETTLE_MS);
       if (cancelled) return;
 
-      if (res.next_challenge) setChallenge(res.next_challenge);
+      if (res.next_challenge) {
+        // A new lesson id means the previous lesson is finished, which is when the fanfare
+        // plays. Checked against the challenge just answered, not the one about to show.
+        const was = lessonOf(ch.id);
+        const now = lessonOf(res.next_challenge.id);
+        if (was && now && was !== now) sound.play("finish");
+        setChallenge(res.next_challenge);
+      }
       setSelected(undefined);
       setStatus("none");
       setCycle((c) => c + 1);
@@ -704,6 +755,32 @@ export function HudApp() {
               <span style={{ color: HUD.cyan }}>argmax</span>
             </div>
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (soundOn) sound.disable();
+                  else void sound.enable();
+                }}
+                title={
+                  soundReady
+                    ? "Duolingo's own correct, wrong and lesson-complete sounds, and the answer spoken in Spanish."
+                    : "Sound needs one click on the page before the browser will allow it — this click counts."
+                }
+                style={{
+                  padding: "4px 10px",
+                  background: soundOn ? HUD.cyan : "transparent",
+                  color: soundOn ? HUD.bg : HUD.faint,
+                  border: `1px solid ${soundOn ? HUD.cyan : HUD.line}`,
+                  borderRadius: 2,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                  cursor: "pointer",
+                }}
+              >
+                {soundOn ? "sound on" : "sound off"}
+              </button>
               <button
                 type="button"
                 onClick={() => setAutoDemo((v) => !v)}
