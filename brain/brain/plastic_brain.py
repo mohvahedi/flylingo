@@ -94,6 +94,7 @@ class PlasticBrain:
         self.r = reservoir
         self.n_pools = int(n_pools)
         self.pool_size = int(pool_size)
+        self.seed = int(seed)
         self.steps = int(steps)
         self.temperature = float(temperature)
         self.lr = float(lr)
@@ -147,6 +148,96 @@ class PlasticBrain:
         self._wm = self._wv = None
         self._wt = 0
         self.updates = 0
+
+    # --------------------------------------------------------------- persistence
+
+    def save(self, path) -> dict:
+        """Write the trained brain to disk.
+
+        What has to be stored is everything that makes a decision reproduce: the learned synaptic
+        scales, the learned pool weights, and the pool assignment itself. The pool assignment is
+        not recomputable from the scales, because it comes from a seeded shuffle of neuron ids, so
+        a checkpoint that stored only the weights would load onto the wrong neurons and every
+        answer would change.
+
+        The encoder fingerprint travels with it, so a checkpoint fit under a different encoding
+        scheme is refused rather than applied to features the server would never reproduce.
+        """
+        import json
+        from pathlib import Path as _Path
+
+        from .encoders import encoder_fingerprint
+
+        path = _Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        meta = {
+            "kind": "plastic_brain",
+            "version": 1,
+            "n_pools": self.n_pools,
+            "pool_size": self.pool_size,
+            "steps": self.steps,
+            "temperature": self.temperature,
+            "seed": self.seed,
+            "mode": self.mode,
+            "updates": int(self.updates),
+            "plastic_edges": int(self.r.plastic_scale.size),
+            "encoder_fingerprint": encoder_fingerprint(),
+        }
+        np.savez_compressed(
+            path,
+            score_w=self.score_w.astype(np.float64),
+            plastic_scale=self.r.plastic_scale.astype(np.float32),
+            pool_index=np.stack(self.pool_index).astype(np.int64),
+            meta=np.array(json.dumps(meta)),
+        )
+        return meta
+
+    def load(self, path, *, require_encoder_match: bool = True) -> dict:
+        """Restore a trained brain, refusing anything that would not reproduce.
+
+        Refusal is deliberate and loud. A checkpoint applied to a different encoder, a different
+        pool layout or a different plastic edge set produces confident nonsense, and a brain that
+        looks trained while answering arbitrarily is worse than one that reports it is fresh.
+        """
+        import json
+        from pathlib import Path as _Path
+
+        from .encoders import encoder_fingerprint
+
+        path = _Path(path)
+        with np.load(path, allow_pickle=False) as d:
+            meta = json.loads(str(d["meta"]))
+            if meta.get("kind") != "plastic_brain":
+                raise ValueError(f"not a plastic-brain checkpoint: {meta.get('kind')!r}")
+            if require_encoder_match:
+                mine, theirs = encoder_fingerprint(), meta.get("encoder_fingerprint")
+                if mine != theirs:
+                    raise ValueError(
+                        f"checkpoint was trained under encoder {theirs!r}, this process uses "
+                        f"{mine!r}; refusing to load"
+                    )
+            if (int(meta["n_pools"]), int(meta["pool_size"])) != (self.n_pools, self.pool_size):
+                raise ValueError(
+                    f"checkpoint pools {meta['n_pools']}x{meta['pool_size']} do not match this "
+                    f"brain's {self.n_pools}x{self.pool_size}"
+                )
+            score_w = d["score_w"]
+            scale = d["plastic_scale"]
+            pool_index = d["pool_index"]
+
+        if scale.size != self.r.plastic_scale.size:
+            raise ValueError(
+                f"checkpoint has {scale.size} plastic edges, this brain has "
+                f"{self.r.plastic_scale.size}"
+            )
+        if not np.array_equal(pool_index, np.stack(self.pool_index)):
+            raise ValueError("checkpoint pool layout differs from this brain's")
+
+        self.score_w = score_w.astype(np.float64)
+        self.r.plastic_scale[:] = scale.astype(np.float32)
+        self.r.apply_plastic()
+        self.updates = int(meta.get("updates", 0))
+        return meta
 
     # ------------------------------------------------------------------ forward
 

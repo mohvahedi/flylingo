@@ -288,6 +288,7 @@ class FlyReservoir:
         pinned in tests/test_gpu_matvec.py.
         """
         self._prepare_gpu_settle()
+        self._build_gpu_mirror("graph")  # idempotent; rebuilds after a graph copy
         cp = self._cp
         mode = self._mode
 
@@ -357,9 +358,15 @@ class FlyReservoir:
         return m
 
     def _gpu_matvec_active(self) -> bool:
-        """Whether the active matrix has a GPU mirror to use."""
+        """Whether the active matrix has a GPU mirror to use, building it if it is missing.
+
+        The graph mirror is dropped when `enable_plasticity` takes a private copy of the matrix
+        (the uploaded copy would otherwise point at the shared, pre-scale array), so this has to
+        re-upload on demand rather than assume the mirror is still there.
+        """
         if not getattr(self, "_gpu", False):
             return False
+        self._build_gpu_mirror("graph")
         if self._mode == "random_graph":
             self._build_gpu_mirror("random")
         return True
@@ -580,9 +587,26 @@ class FlyReservoir:
             pos = np.sort(rng.choice(pos, int(max_edges), replace=False))
 
         self.plastic_pos = pos.astype(np.int64)
-        self.plastic_pre = csr.indices[pos].astype(np.int64)
+        self.plastic_pre = csr.indices[pos].astype(np.int64)  # topology only; ids, not weights
         self.plastic_pool = np.asarray(pool_of_row)[rows[pos]].astype(np.int64)
         self.plastic_scale = np.ones(pos.size, np.float32)
+
+        # Own the weights before touching them.
+        #
+        # self.graph is a REFERENCE to the shared connectome matrix, and apply_plastic writes
+        # scaled values into its CSR data in place. Without this copy, training one brain silently
+        # rewrites the connectome every later brain is built from, and the next brain captures the
+        # previous one's trained weights as its own "pristine anatomical" baseline. Measured: a
+        # second brain built after the first had trained to 8x captured a baseline at exactly
+        # 8.00x the anatomical weights, so the control arms in a four-arm comparison were NOT
+        # starting from the same weights and the "same pristine weights for every arm" premise was
+        # false. Copied only here, so a frozen, non-plastic reservoir still pays nothing.
+        if not getattr(self, "_owns_graph_data", False):
+            self.graph = self.graph.copy()
+            self._owns_graph_data = True
+            # A GPU mirror uploaded before this point points at the old array.
+            if getattr(self, "_gmirror", None):
+                self._gmirror.pop("graph", None)
 
         # Make the control matrix exist now so its pristine weights are captured before any
         # plasticity is applied.
