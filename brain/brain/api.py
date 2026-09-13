@@ -294,6 +294,34 @@ def _pulse_dopamine(correct: bool) -> float:
     return level
 
 
+def _reset_readout_learning() -> str:
+    """Start the active readout's learning over, WITHOUT changing which readout it is.
+
+    This distinction matters. Starting a session used to call `_fresh_readout()` unconditionally,
+    which replaced whatever readout was selected with the default one -- so the HUD, which starts
+    a session on load, would silently revert the plastic brain back to the old prompt-index
+    readout and the demo would quietly stop running on the connectome.
+
+    "Fresh" should mean the learning starts over, not that the architecture changes.
+    """
+    kind = STATE.get("readout_kind")
+    if kind == "plastic_brain":
+        pb = _plastic_brain()
+        pb.r.plastic_scale[:] = 1.0
+        pb.r.apply_plastic()
+        # 1/pool_size is exactly the unweighted mean, so this is the anatomical brain with no
+        # learning of either kind.
+        pb.score_w[:] = 1.0 / pb.pool_size
+        pb._m = pb._v = pb._wm = pb._wv = None
+        pb._t = pb._wt = 0
+        pb.updates = 0
+        STATE["checkpoint_status"] = "plastic connectome, scales at 1.0"
+        return kind
+    STATE["adapter"], STATE["readout_kind"] = _fresh_readout()
+    STATE["checkpoint_status"] = "fresh (untrained)"
+    return STATE["readout_kind"]
+
+
 def _active_parameters() -> int:
     """How many trainable parameters the ACTIVE readout has.
 
@@ -304,7 +332,9 @@ def _active_parameters() -> int:
     if STATE.get("readout_kind") == "plastic_brain":
         pb = STATE.get("plastic_brain")
         if pb is not None:
-            return int(pb.r.plastic_scale.size)
+            # Both parts train: the synaptic scales on real edges AND the weights that read each
+            # answer population. Reporting only the synapses understated what learns.
+            return int(pb.r.plastic_scale.size) + int(pb.score_w.size)
         return 0
     return int(STATE["adapter"].parameters())
 
@@ -320,6 +350,8 @@ def _plastic_telemetry() -> dict:
         return {}
     s = pb.r.plastic_scale
     return {
+        "plastic_readout_params": int(pb.score_w.size),
+        "plastic_readout_std": float(np.std(pb.score_w)),
         "plastic_edges": int(s.size),
         "plastic_of_total": float(s.size / max(1, pb.r.graph.nnz)),
         "plastic_scale_mean": float(np.mean(s)),
@@ -638,8 +670,11 @@ def start_session(req: StartReq) -> dict:
         # A genuinely naive readout. The shipped checkpoint has already memorised the whole
         # curriculum, so with it loaded there is nothing to watch learn; this is the state the
         # demo wants when the point is to SEE the training happen.
-        STATE["adapter"], STATE["readout_kind"] = _fresh_readout()
-        STATE["checkpoint_status"] = "fresh (untrained)"
+        #
+        # Resets the ACTIVE readout's learning rather than swapping architectures: the HUD starts
+        # a session on load, and replacing the readout here silently reverted the plastic brain
+        # to the old prompt-index readout.
+        _reset_readout_learning()
         STATE["fresh_brain"] = True
         STATE["dopamine"] = 0.0
         STATE["dopamine_total"] = 0
@@ -910,25 +945,11 @@ def train(req: TrainReq) -> dict:
         if req.kind not in ("plastic_brain", "prompt_index", "policy_adapter"):
             return {"ok": False, "detail": f"unknown readout kind {req.kind!r}"}
         STATE["readout_kind"] = req.kind
-        if req.kind == "plastic_brain":
-            # Reset the scales to 1.0 so "from scratch" means from scratch: the anatomical
-            # weights, before any learning.
-            pb = _plastic_brain()
-            pb.r.plastic_scale[:] = 1.0
-            pb.r.apply_plastic()
-            pb.updates = 0
-            pb._m = None
-            pb._v = None
-            pb._t = 0
-            STATE["checkpoint_status"] = "plastic connectome, scales at 1.0"
-            STATE["fresh_brain"] = True
-        else:
-            STATE["adapter"], STATE["readout_kind"] = _fresh_readout()
-            STATE["checkpoint_status"] = "fresh (untrained)"
-            STATE["fresh_brain"] = True
+        # One reset path, used by /train and /session alike, so the two cannot drift apart.
+        _reset_readout_learning()
+        STATE["fresh_brain"] = True
     elif req.fresh:
-        STATE["adapter"], STATE["readout_kind"] = _fresh_readout()
-        STATE["checkpoint_status"] = "fresh (untrained)"
+        _reset_readout_learning()
         STATE["fresh_brain"] = True
     else:
         loaded, status = _load_readout(CHECKPOINT_PROMPT_INDEX)

@@ -261,3 +261,67 @@ def test_softmax_is_stable_on_extremes():
     assert np.all(np.isfinite(p))
     assert abs(p.sum() - 1.0) < 1e-12
     assert p[0] > 0.999
+
+
+# ------------------------------------------------- the readout survives a session start
+
+def test_starting_a_session_does_not_swap_the_active_readout():
+    """Regression: /session with fresh=true used to replace the readout outright.
+
+    The HUD starts a session on load, so the plastic brain was silently reverted to the old
+    prompt-index readout the moment the page opened, and the demo stopped running on the
+    connectome without anything reporting it. "Fresh" must mean the learning starts over, not
+    that a different architecture answers.
+    """
+    from fastapi.testclient import TestClient
+
+    from brain.api import app
+
+    with TestClient(app) as c:
+        r = c.post("/train", json={"kind": "plastic_brain", "fresh": True})
+        assert r.status_code == 200
+        assert r.json()["readout_kind"] == "plastic_brain"
+        assert r.json()["parameters"] > 100_000, "parameter count should cover the synapses"
+
+        # this is the call the HUD makes on load
+        s = c.post("/session", json={"fresh": True})
+        assert s.status_code == 200
+
+        h = c.get("/health").json()
+        assert h["readout_kind"] == "plastic_brain", "starting a session swapped the readout"
+
+        # and the brain's own state must be in the live frame
+        t = c.get("/telemetry").json()
+        assert t["readout_kind"] == "plastic_brain"
+        assert t["plastic_edges"] > 0
+        assert t["plastic_readout_params"] == 800  # 4 pools x 200 neurons
+        assert t["plastic_scale_mean"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_a_switched_brain_actually_answers_through_the_connectome():
+    """End to end: with the plastic brain selected, one answer runs and moves the synapses."""
+    from fastapi.testclient import TestClient
+
+    from brain.api import app
+
+    with TestClient(app) as c:
+        c.post("/train", json={"kind": "plastic_brain", "fresh": True})
+        s = c.post("/session", json={"fresh": True}).json()
+        sid, ch = s["session_id"], s["challenge"]
+
+        r = c.post(
+            "/answer",
+            json={
+                "session_id": sid,
+                "challenge_id": ch["id"],
+                "choice_index": -1,
+                "as_fly": True,
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert len(body["probs"]) == 4
+        assert body["fly_choice"] in (0, 1, 2, 3)
+
+        t = c.get("/telemetry").json()
+        assert t["plastic_updates"] >= 1, "the brain did not record an update"
