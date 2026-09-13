@@ -55,7 +55,7 @@ export const LAYOUT = {
    * crops its lower edge gives the Duolingo screen real size and reads as a considered
    * product shot instead of a small object in a void.
    */
-  screenHeight: 7.0,
+  screenHeight: 8.4,
   /** where the phone stands */
   phoneX: 1.85,
   /**
@@ -68,7 +68,7 @@ export const LAYOUT = {
   /** tilt about X, leaning the top away from the viewer */
   phonePitch: 0.03,
   /** the fly's world span: large enough to read as the protagonist */
-  flySpan: 1.6,
+  flySpan: 0.72,
   /** where the fly starts: in front of the phone and to its left */
   flyStart: [-4.6, 0.0, 2.4] as [number, number, number],
   /**
@@ -86,13 +86,13 @@ export const LAYOUT = {
    * wingspan landing centrally covered the text of the card next to it. Perched to the right
    * it reads as sitting on the answer without hiding it.
    */
-  flyCardU: 0.78,
+  flyCardU: 0.84,
   /** how long the flight from wherever it is to the chosen card takes, in seconds */
   flySeconds: 1.6,
   /** easing exponent for the flight: 2 eases in and out, which reads as a dart not a slide */
   flyEase: 2.0,
-  camera: [1.35, 3.55, 11.4] as [number, number, number],
-  target: [1.35, 3.3, 0.4] as [number, number, number],
+  camera: [1.35, 3.75, 12.2] as [number, number, number],
+  target: [1.35, 3.5, 0.4] as [number, number, number],
   fov: 38,
 };
 
@@ -136,7 +136,12 @@ function PhoneScreen({
 }: {
   texture: THREE.CanvasTexture | null;
   screenRef: React.RefObject<THREE.Mesh | null>;
-  onMeasured?: (info: { scale: number; phoneWorldH: number; screenWorldH: number }) => void;
+  onMeasured?: (info: {
+    scale: number;
+    phoneWorldH: number;
+    footprintX: number;
+    footprintZ: number;
+  }) => void;
 }) {
   const { root, anchor } = usePhone();
   const planeQuat = useMemo(screenPlaneQuaternion, []);
@@ -205,6 +210,8 @@ function PhoneScreen({
     const phoneBox = new THREE.Box3().setFromObject(root);
     const phoneSize = phoneBox.getSize(new THREE.Vector3());
     const unitPhoneH = Math.max(phoneSize.y, phoneSize.z);
+    const unitFootprintX = phoneSize.x;
+    const unitFootprintZ = Math.max(phoneSize.y, phoneSize.z);
 
     const s = unitScreenH > 1e-9 ? LAYOUT.screenHeight / unitScreenH : PHONE_SCALE_FALLBACK;
     const phoneWorldH = unitPhoneH * s;
@@ -215,7 +222,12 @@ function PhoneScreen({
     g.scale.setScalar(s);
     g.position.set(LAYOUT.phoneX, -centreY * s + phoneWorldH / 2, 0);
     g.updateWorldMatrix(true, true);
-    onMeasured?.({ scale: s, phoneWorldH, screenWorldH: LAYOUT.screenHeight });
+    onMeasured?.({
+      scale: s,
+      phoneWorldH,
+      footprintX: unitFootprintX * s,
+      footprintZ: unitFootprintZ * s,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plane, root]);
 
@@ -231,6 +243,43 @@ function PhoneScreen({
   );
 }
 
+/**
+ * Ambient occlusion where the handset meets the floor.
+ *
+ * A cast shadow alone leaves the base looking soft and composited: what sells contact is a
+ * tight dark pool right at the junction. This is a small decal on the floor, sized from the
+ * handset's measured footprint so it cannot drift out of register with the phone.
+ */
+function PhoneContactAO({ footprintX, footprintZ }: { footprintX: number; footprintZ: number }) {
+  const tex = useMemo(() => {
+    const c = document.createElement('canvas');
+    c.width = 128;
+    c.height = 128;
+    const ctx = c.getContext('2d');
+    if (ctx) {
+      const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+      g.addColorStop(0, 'rgba(0,0,0,0.78)');
+      g.addColorStop(0.45, 'rgba(0,0,0,0.40)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 128, 128);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }, []);
+  return (
+    <mesh
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[LAYOUT.phoneX, 0.0025, 0]}
+      renderOrder={1}
+    >
+      <planeGeometry args={[footprintX * 2.1, footprintZ * 1.5]} />
+      <meshBasicMaterial map={tex} transparent depthWrite={false} />
+    </mesh>
+  );
+}
+
 /** The specimen: flies to the card it picked, hovers, reaches out to touch it. */
 function FlyActor({
   rects,
@@ -242,6 +291,7 @@ function FlyActor({
   paused,
   timeScale,
   screenRef,
+  targetOut,
 }: {
   rects: OptionRect[];
   flyChoice: number;
@@ -252,10 +302,15 @@ function FlyActor({
   paused: boolean;
   timeScale: number;
   screenRef: React.RefObject<THREE.Mesh | null>;
+  targetOut: React.RefObject<THREE.Vector3 | null>;
 }) {
   const group = useRef<THREE.Group>(null);
   const target = useRef(new THREE.Vector3(...LAYOUT.flyStart));
   const home = useMemo(() => new THREE.Vector3(...LAYOUT.flyStart), []);
+  // published so the contact shadow on the glass can follow the perch point
+  useEffect(() => {
+    (window as unknown as { __flyTargetRef?: unknown }).__flyTargetRef = null;
+  }, []);
   const [behavior, setBehavior] = useState<Behavior | null>(null);
   const arrivedAt = useRef(-1);
   const flightFrom = useRef(new THREE.Vector3(...LAYOUT.flyStart));
@@ -289,6 +344,7 @@ function FlyActor({
     const delta = Math.min(0.05, Math.max(0, rawDelta));
 
     // ---- where the fly should be -------------------------------------------------
+    targetOut.current = target.current;
     const rect = flyChoice >= 0 ? rects[flyChoice] : undefined;
     const screen = screenRef.current;
     if (rect && screen) {
@@ -540,6 +596,61 @@ function bodyMats(): { name: string; color: string; metalness: number }[] {
 /** every mesh in the loaded handset, published by PhoneScreen */
 export const sceneMeshes: THREE.Mesh[] = [];
 
+/**
+ * A soft contact shadow drawn on the glass under the fly.
+ *
+ * Without it the fly reads as composited over the screen rather than standing on it, because
+ * a real object resting on a surface occludes the light reaching it. The body's own per-tarsus
+ * contact patches are floor decals and are switched off here, so this is the screen equivalent:
+ * one soft ellipse, oriented to the glass and following the fly's perch point.
+ */
+function ScreenContactShadow({
+  targetRef,
+  screenRef,
+}: {
+  targetRef: React.RefObject<THREE.Vector3 | null>;
+  screenRef: React.RefObject<THREE.Mesh | null>;
+}) {
+  const ref = useRef<THREE.Mesh>(null);
+  const tex = useMemo(() => {
+    const c = document.createElement('canvas');
+    c.width = 128;
+    c.height = 128;
+    const ctx = c.getContext('2d');
+    if (ctx) {
+      const g = ctx.createRadialGradient(64, 64, 2, 64, 64, 62);
+      g.addColorStop(0, 'rgba(0,0,0,0.62)');
+      g.addColorStop(0.5, 'rgba(0,0,0,0.30)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 128, 128);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }, []);
+
+  useFrame(() => {
+    const m = ref.current;
+    const screen = screenRef.current;
+    const target = targetRef.current;
+    if (!m || !screen || !target) return;
+    screen.updateWorldMatrix(true, false);
+    m.position.copy(target);
+    // lie flat on the glass, so orientation comes from the screen's own world rotation
+    screen.getWorldQuaternion(m.quaternion);
+    // lift a hair off the surface to avoid z-fighting with the display
+    m.translateZ(0.0022);
+  });
+
+  return (
+    <mesh ref={ref} renderOrder={2}>
+      <planeGeometry args={[1.25, 0.95]} />
+      <meshBasicMaterial map={tex} transparent depthWrite={false} />
+    </mesh>
+  );
+}
+
 export function PhoneStage(props: PhoneStageProps) {
   const {
     prompt,
@@ -566,7 +677,13 @@ export function PhoneStage(props: PhoneStageProps) {
   const textureRef = useRef<THREE.CanvasTexture | null>(null);
   const [texture, setTexture] = useState<THREE.CanvasTexture | null>(null);
   const [rects, setRects] = useState<OptionRect[]>([]);
-  const [measured, setMeasured] = useState<{ scale: number; phoneWorldH: number } | null>(null);
+  const [measured, setMeasured] = useState<{
+    scale: number;
+    phoneWorldH: number;
+    footprintX: number;
+    footprintZ: number;
+  } | null>(null);
+  const flyTargetRef = useRef<THREE.Vector3 | null>(null);
 
   /**
    * A stable key for the screen's contents.
@@ -699,7 +816,7 @@ export function PhoneStage(props: PhoneStageProps) {
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
         shadow-camera-near={0.5}
-        shadow-camera-far={24}
+        shadow-camera-far={34}
         shadow-camera-left={-5}
         shadow-camera-right={5}
         shadow-camera-top={5}
@@ -717,7 +834,7 @@ export function PhoneStage(props: PhoneStageProps) {
         <PhoneScreen
           texture={texture}
           screenRef={screenRef}
-          onMeasured={({ scale, phoneWorldH }) => setMeasured({ scale, phoneWorldH })}
+          onMeasured={(m) => setMeasured(m)}
         />
       </Suspense>
 
@@ -731,8 +848,16 @@ export function PhoneStage(props: PhoneStageProps) {
         paused={paused}
         timeScale={timeScale}
         screenRef={screenRef}
+        targetOut={flyTargetRef}
       />
 
+      {measured && (
+        <PhoneContactAO
+          footprintX={measured.footprintX}
+          footprintZ={measured.footprintZ}
+        />
+      )}
+      <ScreenContactShadow targetRef={flyTargetRef} screenRef={screenRef} />
       <Bloom />
       <OrbitControls
         target={LAYOUT.target}

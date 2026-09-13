@@ -122,6 +122,14 @@ export function usePhone(): PhoneParts {
       }
       mat.needsUpdate = true;
       mesh.material = mat;
+
+      // Cast the phone's shadow. Without this the handset has no shadow at all and reads as a
+      // graphic pasted over a gradient: the floor had `receiveShadow` and the key light had
+      // `castShadow` from the start, but the GLB's meshes never had `castShadow`, so there was
+      // nothing for the floor to receive. The body casts; the glass does not, because a screen
+      // is an emitter and a shadow from it would be wrong.
+      mesh.castShadow = true;
+      mesh.receiveShadow = false;
     });
 
     // Parent the replacement plane to the screen mesh's own parent, so it inherits every
