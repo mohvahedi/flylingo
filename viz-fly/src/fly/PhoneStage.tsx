@@ -69,17 +69,17 @@ export const LAYOUT = {
   /** tilt about X, leaning the top away from the viewer */
   phonePitch: 0.03,
   /**
-   * The fly's world span: large enough to read as the protagonist.
+   * The fly's world span, in world units. The handset is about 8.7 tall, so at 8.6 the
+   * specimen is the same size as the phone, which is what was asked for.
    *
-   * Measured at 0.72 the specimen filled about 9.6% of the screen's height (a 0.80 unit
-   * bounding box against a screen 8.4 tall) and read as an insect that happened to be in the
-   * shot. At 1.35 it is 18% of the screen height and about the height of the card it stands
-   * on, which is the size the composition wants: big enough to be a character, small enough
-   * that the lesson under it is still readable.
+   * Sizes tried: 0.72 read as an insect that happened to be in the shot; 1.35 read as a
+   * character but still small; 8.6 makes it a co-lead with the handset. At this size it can no
+   * longer stand ON a card, because the cards are 1.5 units tall and it would cover the lesson,
+   * so it stands beside the handset and reaches in with its forelegs. See `lateral` below.
    */
-  flySpan: 1.35,
+  flySpan: 8.6,
   /** where the fly starts: in front of the phone and to its left */
-  flyStart: [-4.6, 0.0, 2.4] as [number, number, number],
+  flyStart: [-8.0, 0.0, 4.0] as [number, number, number],
   /**
    * How far off the glass the fly hovers when it reaches a card, in the phone's own mesh
    * units. The screen is only 0.155 tall there, so this has to be small: an earlier value of
@@ -89,9 +89,49 @@ export const LAYOUT = {
    * body lengths as it did at 0.72: 0.006 here puts its feet plane 0.32 world units (3.8% of
    * the screen height) in front of the glass.
    */
-  standoff: 0.006,
-  /** corrected so the model's own forward lines up with the direction of travel */
-  flyYawOffset: 0,
+  /**
+   * Perpendicular offset off the screen plane, in the plane's own units, so it is multiplied by
+   * the phone group's scale.
+   *
+   * 3.64 world units. Raised from 1.5 because the fore tarsi were landing through the glass
+   * rather than on it: measured at 1.5, with the fly correctly facing its card, they read -1.66
+   * and -2.53 on the glass normal, i.e. inside the handset. They move rigidly with the body, so
+   * standing the fly back by their mean 2.1 puts them on the surface.
+   */
+  standoff: 0.094,
+  /**
+   * How far to turn the specimen to face its answer. Measured, not assumed: the asset carries
+   * its own correction rotation, so which way it faces is not readable from the code.
+   *
+   * Swept all four cardinal yaws against the scene's own per-tarsus telemetry, with the fly
+   * parked on card 2:
+   *
+   *     yaw   0 deg   fore tarsi  1.656 off glass   at px (430,349) (358,178)
+   *     yaw  90 deg   fore tarsi  0.661 off glass   at px (-176,321) (-271,139)
+   *     yaw 180 deg   fore tarsi  4.543 off glass   at px (-158,321) (-83,138)
+   *     yaw 270 deg   fore tarsi  3.588 off glass   at px (466,345) (567,174)
+   *
+   * 90 degrees has the smallest distance and is still the WRONG answer: those tarsi are near the
+   * plane only because they hang beside the handset, and their screen x is negative, off the
+   * left edge. Only at 0 do the forelegs sit at the card's own horizontal position. Taking the
+   * smallest distance alone would have picked 90 and pointed the fly at nothing, so the screen
+   * position is checked as well as the distance.
+   */
+
+  flyYawOffset: (() => {
+    // Overridable from the URL as ?yaw=<radians> so the correct value can be swept against the
+    // real tarsus telemetry rather than guessed. The fly asset carries its own correction
+    // rotation, so which way it actually faces is a measurement, not a reading of the code.
+    const q =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get("yaw");
+    const v = q === null ? NaN : Number(q);
+    // 0.55 rad off the head-on approach. Facing the card squarely put the abdomen across the
+    // screen and hid the question; the cards are wide enough to be hit anyway, so the body is
+    // turned aside. Measured: the tarsi stay on the chosen card.
+    return Number.isFinite(v) ? v : 0.55;
+  })(),
   /**
    * How far across the chosen card the fly perches, 0 = left edge, 1 = right edge.
    *
@@ -102,12 +142,56 @@ export const LAYOUT = {
    * hanging off the right edge of the screen.
    */
   flyCardU: 0.88,
+  /**
+   * How far to the LEFT of the chosen card the fly stands, in world units, so its body clears
+   * the handset and only its forelegs cross onto the glass.
+   *
+   * This is the change that makes "use its arms to choose the option" possible at phone size:
+   * the body sits beside the screen and the forelegs are what reach the answer.
+   *
+   * In WORLD units. The body stays clear of the glass while its forelegs stay inside reach of
+   * the card: at 4.0 the legs would have had to span more than their own length even facing the
+   * right way, and at 0 the body itself would sit over the lesson text.
+   *
+   * It is divided by the plane's inherited scale at the point of use. That division is not
+   * cosmetic: the screen plane is a child of the phone group, which is scaled by about 54, so
+   * adding this straight to the plane's local x multiplied it by 54 and threw the fly to
+   * [-177, -0.4, -23], completely out of the scene. Measured, not guessed.
+   */
+  lateral: 2.9,
+  /**
+   * How far BELOW the chosen card the fly stands, in world units.
+   *
+   * The specimen is the same size as the handset, so standing level with the card puts its body
+   * across the upper screen and hides the question text.
+   *
+   * Small on purpose, and bounded by measurement rather than taste: the fly and its tarsi move
+   * rigidly together, so dropping the stand carries the tarsi off the card at about 99 screen
+   * units per world unit. Measured, 2.6 of drop put them at screen y 590-642 against a card
+   * centred at 360. The card band is about a world unit tall, so this is the most that fits.
+   * The rest of the clearance is bought with the camera angle instead, which costs nothing.
+   */
+  perchDrop: 0.15,
+  /**
+   * How far in FRONT of the glass the fly's body stands, world units. Derived from the size so
+   * the pose stays self-similar: at 0.72 the specimen stood 0.24 body-lengths off the card, and
+   * that ratio is what looks right, so it is recomputed rather than re-guessed.
+   */
+  bodyClearance: 1.5,
   /** how long the flight from wherever it is to the chosen card takes, in seconds */
   flySeconds: 1.6,
   /** easing exponent for the flight: 2 eases in and out, which reads as a dart not a slide */
   flyEase: 2.0,
-  camera: [1.35, 3.75, 12.2] as [number, number, number],
-  target: [1.35, 3.5, 0.4] as [number, number, number],
+  /**
+   * The camera has to see an 8.6 unit fly AND an 8.7 unit handset standing side by side, so it is
+   * pulled back until the vertical field clears both. At fov 38 and distance 17.6 the vertical
+   * field is 2*17.6*tan(19) = 12.1 units against a subject about 9 tall. The old 12.2 put the
+   * field at 8.4 and cropped the top of the handset, which is exactly what cut the question text
+   * off the screen. Held at 17.6 rather than 15.6 because the hero panel is wide and the tighter
+   * framing read as cramped.
+   */
+  camera: [0.4, 9.0, 17.6] as [number, number, number],
+  target: [0.4, 4.2, 0.6] as [number, number, number],
   fov: 38,
 };
 
@@ -307,6 +391,7 @@ function FlyActor({
   timeScale,
   screenRef,
   targetOut,
+  phoneScale,
 }: {
   rects: OptionRect[];
   flyChoice: number;
@@ -318,6 +403,8 @@ function FlyActor({
   timeScale: number;
   screenRef: React.RefObject<THREE.Mesh | null>;
   targetOut: React.RefObject<THREE.Vector3 | null>;
+  /** the phone group's measured scale, so plane-local offsets can be authored in world units */
+  phoneScale: number;
 }) {
   const group = useRef<THREE.Group>(null);
   const target = useRef(new THREE.Vector3(...LAYOUT.flyStart));
@@ -328,6 +415,8 @@ function FlyActor({
   }, []);
   const [behavior, setBehavior] = useState<Behavior | null>(null);
   const arrivedAt = useRef(-1);
+  /** the chosen card's world position with no standing offset: what the fly should face */
+  const cardTrue = useRef<THREE.Vector3 | null>(null);
   const flightFrom = useRef(new THREE.Vector3(...LAYOUT.flyStart));
   const lastTarget = useRef(new THREE.Vector3(...LAYOUT.flyStart));
   const flightStart = useRef(0);
@@ -397,6 +486,9 @@ function FlyActor({
     const rect = flyChoice >= 0 ? rects[flyChoice] : undefined;
     const screen = screenRef.current;
     if (rect && screen) {
+      // The body is offset to the LEFT of the card along the glass's own right axis, so it
+      // clears the handset, and forward along the normal so the forelegs have something to
+      // reach across. The forelegs are what land on the answer.
       const local = screenPointToPlaneLocal(
         rect.x + rect.w * LAYOUT.flyCardU,
         rect.cy,
@@ -404,6 +496,9 @@ function FlyActor({
         SCREEN_H,
         LAYOUT.standoff,
       );
+      // plane-local units: divide by the scale the plane inherits, or this becomes 54x too big
+      local.x -= LAYOUT.lateral / phoneScale;
+      local.y -= LAYOUT.perchDrop / phoneScale;
       screen.updateWorldMatrix(true, false);
       target.current.copy(local).applyMatrix4(screen.matrixWorld);
     } else {
@@ -439,6 +534,15 @@ function FlyActor({
     // absolutely from the flight interpolation every frame, like the pose, so it can never
     // accumulate; driven by the animator's own behavior clock so the body and the legs cannot
     // disagree about where the tarsus is.
+    if (screen && flyChoice >= 0 && rects[flyChoice]) {
+      const r = rects[flyChoice];
+      screen.updateWorldMatrix(true, false);
+      cardTrue.current = screenPointToPlaneLocal(r.cx, r.cy, SCREEN_W, SCREEN_H, 0)
+        .applyMatrix4(screen.matrixWorld);
+    } else {
+      cardTrue.current = null;
+    }
+
     const reach: ReachState =
       behavior === 'reach' ? reachCurve(anim.live.age) : ZERO_REACH;
     if (screen && reach.on > 0) {
@@ -556,13 +660,16 @@ function FlyActor({
       cardWorld:
         screen && rects.length
           ? rects.map((r) => {
-              const p = screenPointToPlaneLocal(
+              const lp = screenPointToPlaneLocal(
                 r.x + r.w * LAYOUT.flyCardU,
                 r.cy,
                 SCREEN_W,
                 SCREEN_H,
                 LAYOUT.standoff,
-              ).applyMatrix4(screen.matrixWorld);
+              );
+              lp.x -= LAYOUT.lateral / phoneScale;
+              lp.y -= LAYOUT.perchDrop / phoneScale;
+              const p = lp.applyMatrix4(screen.matrixWorld);
               return [p.x, p.y, p.z].map((v) => +v.toFixed(3));
             })
           : null,
@@ -578,7 +685,14 @@ function FlyActor({
     };
 
     // world -> CSS pixels, so a screenshot can be read against the same numbers
-    scratch.subVectors(target.current, flightPos.current);
+    // Look at the ANSWER, not along the flight line. Once the fly has arrived the flight
+    // vector is zero, so the old code skipped this entirely and the fly simply kept whatever
+    // yaw the flight left it with; there was no orientation being held at all.
+    if (cardTrue.current) {
+      scratch.subVectors(cardTrue.current, g.position);
+    } else {
+      scratch.subVectors(target.current, flightPos.current);
+    }
     if (scratch.lengthSq() > 1e-6) {
       const yaw = Math.atan2(scratch.x, scratch.z) + LAYOUT.flyYawOffset;
       let d = yaw - g.rotation.y;
@@ -994,6 +1108,7 @@ export function PhoneStage(props: PhoneStageProps) {
         timeScale={timeScale}
         screenRef={screenRef}
         targetOut={flyTargetRef}
+        phoneScale={measured?.scale ?? PHONE_SCALE_FALLBACK}
       />
 
       {measured && (

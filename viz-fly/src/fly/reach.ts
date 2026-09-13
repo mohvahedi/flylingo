@@ -63,9 +63,16 @@ export const REACH: ReachTune = {
   hipYaw: -0.18,
   hipRoll: 0.55,
   bodyPitch: 0.16,
-  bodyRoll: 0.1,
-  lean: 0.34,
-  drop: 0.07,
+  // Level. Measured with this at 0.1: the bank put the two fore tarsi about 56 screen units
+  // apart in height, so one sat on the card band and the other just below it, and only one of
+  // them ever held the answer. Level, both land inside the band.
+  bodyRoll: 0.0,
+  // Scaled for an 8.6 unit specimen. These are world-space offsets, so at the old 1.35 they
+  // were tuned for a body six times smaller and would barely move the tarsi now. The lean is
+  // what carries the forelegs the last of the way onto the glass, so it has to be sized to the
+  // gap it has to close.
+  lean: 1.30,
+  drop: 0.30,
   tap: 0.07,
   tapHz: 9,
   headPitch: 0.3,
