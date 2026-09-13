@@ -237,3 +237,34 @@ def test_the_window_curve_reflects_the_recent_answers(client):
     t = client.get("/telemetry").json()
     assert 0 < t["window_size"] <= 20, f"window size {t['window_size']} out of range"
     assert 0.0 <= t["window_accuracy"] <= 1.0
+
+
+def test_health_and_the_frame_never_disagree_about_the_readout(client):
+    """The two claims about whether the brain is trained must always match.
+
+    This caught a real bug. `fresh_brain` lived in the session-start path, so starting a session
+    without passing `fresh` (exactly what the HUD does on load) reset it to False while the
+    adapter in memory was still the naive one. The panel then reported "pretrained" while
+    /health, which derives the same claim from checkpoint_status, correctly said "untrained".
+    Two parts of the same UI contradicting each other about whether learning is happening is the
+    worst possible failure for this project, so it is pinned here.
+    """
+    def naive_from_health():
+        return client.get("/health").json().get("checkpoint_status") != "loaded"
+
+    # 1. a fresh reset
+    client.post("/train", json={"fresh": True})
+    assert naive_from_health() is True
+    assert client.get("/telemetry").json()["fresh_brain"] is True
+
+    # 2. starting a session the way the UI does, with no `fresh` flag
+    client.post("/session", json={"lesson_id": "u1l1"})
+    assert naive_from_health() is True, "starting a session changed what /health believes"
+    assert client.get("/telemetry").json()["fresh_brain"] is True, (
+        "starting a session reset fresh_brain, so the UI would call a naive brain pretrained"
+    )
+
+    # 3. and loading the shipped checkpoint flips both together
+    client.post("/train", json={"fresh": False})
+    assert naive_from_health() is False
+    assert client.get("/telemetry").json()["fresh_brain"] is False

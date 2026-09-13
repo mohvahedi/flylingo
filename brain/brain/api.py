@@ -560,8 +560,11 @@ def start_session(req: StartReq) -> dict:
         STATE["replay_x"] = []
         STATE["replay_y"] = []
         STATE["rehearsals"] = 0
-    else:
-        STATE["fresh_brain"] = False
+    # NOTE: there is deliberately no `else` branch here resetting fresh_brain to False.
+    # fresh_brain describes the ADAPTER in memory, not the session, and the UI starts a session
+    # on load without passing `fresh`. Resetting it here therefore made the UI report
+    # "pretrained" while the readout was in fact naive, contradicting /health, which derives the
+    # same claim from checkpoint_status and got it right. The two must not be able to disagree.
 
     order = _lesson_order()
     pos = order.index(lesson.id) if lesson.id in order else 0
