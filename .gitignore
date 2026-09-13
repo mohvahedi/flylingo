@@ -9,5 +9,10 @@ __pycache__/
 .pytest_cache/
 # Local runtime state, checkpoints and logs
 brain/runs/**/_smoke.json
+# Run artifacts of the four-arm experiment and the demo's own trained brain. \`brain/runs\` is
+# mixed on purpose: curriculum/ and promptindex/ hold the SHIPPED checkpoints the API loads and
+# ARE tracked, so this names the experiment directory rather than ignoring brain/runs wholesale.
+# of checkpoints into a published tree. of checkpoints into a published tree.
+brain/runs/plastic_brain/
 artifacts/
 *_real_run.log

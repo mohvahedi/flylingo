@@ -50,7 +50,7 @@ Every figure below came from a command that ran on this machine against the real
 | Neurons with a measured soma | 139,662 | `somaLocation` in the annotations feather |
 | Placement filled from group centroid | 27,038 | (class, in-degree decile) centroid |
 | Connectome tick rate | 10 Hz, continuously between answers | background thread, locked |
-| Test suite | 82 passed | `pytest tests/` |
+| Test suite | 167 passed | `pytest tests/` |
 
 Two honest notes on those last rows. The spike threshold is a **visualization convention on
 an abstract rate model**, not a claim about biological spiking, matching the reference
@@ -374,6 +374,40 @@ measurable learning advantage** on this task: the intact connectome, a shuffled 
 degree-matched random graph, and the raw encoding with no reservoir at all all reach the same
 accuracy. That statement is in the HUD footer and should stay there.
 
+### There are two readouts, and the second one puts the learning in the connectome
+
+Everything above describes the **prompt-index** readout, which is the default and keeps the graph
+frozen. A second readout exists and is selectable, because the frozen design has a weakness worth
+being honest about: the connectome is only a fixed feature map, so the thing that learns is a layer
+beside the brain rather than the brain.
+
+**`plastic_brain`** moves both jobs inside it:
+
+- **choosing.** Four answer pools are disjoint groups of *real* neurons. The prompt is encoded, the
+  connectome settles for six recurrent steps, and the answer is whichever pool scores highest, each
+  pool's score being a *learned* weighted sum over its own neurons. There is no classifier outside
+  the brain; the argmax is over the brain's own populations.
+- **learning.** The trainable parameters are **117,800 real connectome edges** — the ones whose
+  target neuron lies in a pool — each carrying a multiplicative scale on its anatomical weight. The
+  synapses that change are real synapses onto real neurons.
+
+Two details that matter for honesty. The pools are selected by a seeded permutation, so they are
+real neurons of the reconstruction but are **not anatomically identified cell types**, and are not
+claimed to be. And an equal-weight mean over a pool measured only 37.1% linearly separable against
+100% for the same neurons read with learned weights, so the readout is weighted because averaging
+discards *which* neurons fired, which is where the signal is.
+
+The four-arm table above was measured on **this** readout, because it is the design in which the
+wiring is actually inside the learning loop, and therefore the only one where the wiring question can
+be answered at all: in the frozen design the readout can absorb any deficiency in the wiring.
+
+**The demo does not delete your progress.** The plastic brain checkpoints every 100 plasticity
+updates and on shutdown, and a restart resumes those weights, with `checkpoint_status` naming which
+state is live (`resumed` / `scales at 1.0` / `refused`). Selecting the plastic brain with
+`{"fresh": false}` resumes rather than wiping; `{"fresh": true}` is the deliberate reset. Persisting
+only on a graceful shutdown would not have been enough — on Windows `terminate()` is a hard kill, so
+the hook never runs, which was measured before the periodic save was added.
+
 **Training is a switch, not a claim.** `POST /train {"fresh": true}` wipes the readout to a naive
 state (measured: chance across the course) so the learning can be watched from zero.
 `{"training": false}` freezes the weights, which is the control: same lesson, same connectome,
@@ -403,16 +437,35 @@ Single-epoch accuracy swings by 7-8.5 points within one arm, so a reading taken 
 draw from that distribution. Stopping this same run at epoch 15 gives intact 83.5% against
 shuffled 74.2% and looks like a wiring advantage; stopping at 10, 20, 30 or 60 does not.
 
-| arm | last-10-epoch mean | final epoch | start |
+| arm | last-10-epoch mean | sd | final epoch mean |
 |---|---|---|---|
-| intact (MaleCNS v1.0) | 94.8% | 92.8% | 19.6% |
-| shuffled | 92.0% | 89.7% | 19.6% |
-| random_graph (degree-matched) | **95.1%** | 92.8% | 23.7% |
-| no_edges | 21.6% | 21.6% | 21.6% |
+| intact (MaleCNS v1.0) | **87.7%** | 1.8% | 78.1% |
+| shuffled | 88.2% | 2.3% | 80.2% |
+| random_graph (degree-matched) | 87.0% | 1.9% | 81.4% |
+| no_edges | 21.6% | 0.0% | 21.6% |
 
-Majority-class baseline 26.8%. The random graph is nominally the highest arm. The trained
-ceiling is **94.7%** (mean of the last 10 epochs of a 60-epoch run), not the 100% that a single
-lucky epoch produced.
+Colab T4, 40 epochs, 5 seeds, paired per seed (`colab/step2_measure.py`). Majority-class baseline
+26.8%.
+
+**Read the per-control differences, not the best-of.** Against each control separately: **−0.5%**
+(sd 2.1) versus the shuffle and **+0.7%** (sd 1.7) versus the random graph. Intact led the best
+control on **0 of 5** seeds. The `best control` column is a `max()` over two noisy arms, so it is
+biased against `intact` and "intact is 1.4 points behind it" is not evidence that the real wiring is
+worse. What is established is that the specific wiring does not measurably matter, and that a
+recurrent graph is **required**: `no_edges` sits at 21.6%, below the 26.8% baseline, while every
+connected arm reaches the high eighties.
+
+Note the final-epoch column: it is 6–9 points below the run's own level, every time. A single epoch is
+not a measurement, which is why the score is a tail mean.
+
+An earlier version of this table reported 94.8 / 92.0 / 95.1 / 21.6 with a "94.7% ceiling". Those
+figures came from the accelerated path **before** a defect in it was found: a `cupyx` sparse matvec
+canonicalised the uploaded control matrix in place, merging 31,231 duplicate `(row, column)` pairs
+and renumbering every entry after each merge, while the trainer wrote weights by position. The
+accelerator therefore trained a matrix the CPU never had — it agreed to 3e-07 on an untrained brain
+and diverged by 6.0e-01 after six plasticity steps. The numbers above were measured after the fix, on
+a path that is now gated before any figure is read, and all 20 checkpoints were re-loaded on a
+different machine and recomputed from scratch (20/20 exact).
 
 That is the standard reservoir-computing result: a rich fixed recurrent structure gives a useful
 feature space, and the specific wiring is not what carries the information.
