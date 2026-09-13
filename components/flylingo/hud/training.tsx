@@ -19,7 +19,9 @@ import { HUD, Label, Meter, Spark } from "./primitives";
  *  - the REHEARSAL count is how many supervised steps were taken from the replay buffer. It is
  *    shown because it is the honest explanation of why the curve moves at all: one answer gives
  *    one update, and one update cannot fit 516 parameters. Measured, without rehearsal the fly
- *    plateaus near 45%; with it, it reaches 92-100% within about a hundred answers.
+ *    plateaus near 45%; with it, it settles around 95% within about a hundred answers. Quote the
+ *    95, not the best single reading: windowed accuracy swings by several points per answer, so
+ *    a peak figure reports the luckiest moment rather than the level reached.
  *
  * The honesty caveat stays on screen rather than being tucked away, because this panel is the
  * one that looks most like a claim.
@@ -76,12 +78,13 @@ export function HudTraining({
   }, [windowSize, windowAccuracy]);
 
   const mean = (a: number[]) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
-  // Peak of the recent window against the opening, not last-point against first-third: accuracy
-  // dips when the course moves on to harder material, and a strict end-to-end comparison then
-  // reported "no clear trend" across a climb from chance to the high nineties.
+  // Mean of the recent windows against the mean of the opening ones. This deliberately does NOT
+  // take the peak of the recent window: windowed accuracy swings by several points from answer
+  // to answer, so a best-of-10 figure reports the luckiest window rather than the level reached.
+  // Accuracy does dip when the course moves to harder material, which affects both ends.
   const early = curve.length >= 8 ? curve.slice(0, 8) : [];
   const late = curve.length >= 8 ? curve.slice(-10) : [];
-  const gain = early.length && late.length ? Math.max(...late) - mean(early) : 0;
+  const gain = early.length && late.length ? mean(late) - mean(early) : 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, height: "100%" }}>
