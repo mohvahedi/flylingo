@@ -378,7 +378,11 @@ ENCODER_FINGERPRINT = encoder_fingerprint()
 #: How long a dopamine pulse takes to fall to 1/e, seconds. Dopamine here is not decoration:
 #: it is the reward signal that drives the readout's plasticity, so the trace that the UI draws
 #: is the same number that gated the last weight update.
-DOPAMINE_TAU = 1.4
+#:
+#: 2.5 s rather than a snappier value on purpose: the pulse fires on an answer, and the viewer
+#: is then reading the result and the next question, so a 1.4 s trace had already decayed to
+#: nothing by the time anyone looked. The count of pulses is what persists; this is the pulse.
+DOPAMINE_TAU = 2.5
 #: A correct answer delivers this much dopamine in one pulse, and a wrong one takes this much
 #: away. Negative is a real part of the signal (a prediction error below expectation), not a
 #: punishment added for effect.

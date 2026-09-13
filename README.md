@@ -333,3 +333,54 @@ licence. If this project is ever distributed or licensed, that obligation travel
 it is worth deciding deliberately rather than discovering later. Attribution for both models is
 rendered in the HUD footer, because a licence that requires credit requires it where the work
 is shown, not only in a repository.
+
+## What "the fly learns Spanish" actually means, and what trains
+
+This is the part of the project most likely to be overclaimed, so it is written down precisely.
+
+**What really happens, per answer:**
+
+1. The prompt is encoded (a deterministic character n-gram hash, `brain/encoders.py`) and stepped
+   through the **real connectome** — 166,700 neurons, 25.58M edges, 24.5 ms per step. That is
+   genuine: the prompt drives the measured wiring and the resulting activity is what the readout
+   sees. The live view streams those spikes at 20 Hz and the connectome steps continuously
+   between answers, so the activity on screen is produced, not replayed.
+2. A **516-parameter readout** maps that activity to one of the four options. It samples, so it
+   is stochastic.
+3. The answer is scored. A correct pick delivers **dopamine**, which is the reward signal that
+   gates the weight update; a wrong one takes dopamine away. The pulse the UI draws and the
+   signal that gated the last update are the same number, which is why the bar and the curve
+   move together rather than merely correlating.
+4. The readout is then trained **supervised against the lesson's own answer key**, with
+   **rehearsal** from a replay buffer.
+
+**Why rehearsal is there, measured.** Three update schemes were tried over the real 97-challenge
+curriculum, each from a fresh readout:
+
+| scheme | outcome |
+|---|---|
+| reward-only (reinforce the sampled action) | plateaus near **45%** at every learning rate tried |
+| supervised, one update per answer | about **40%** in a single pass |
+| supervised + **60 rehearsal steps per answer** | **92-100% within about 100 answers** |
+
+The first fails because a wrong answer only says "not that one", which teaches nothing about
+which option was right. The second fails because one answer is one update, and 97 updates cannot
+fit 516 parameters. A learner rehearses; that is the whole trick, and it is standard practice
+rather than a shortcut.
+
+**What this is, honestly.** It is **memorisation of the phrase-to-answer mapping**, which is
+exactly what this project measured the readout to be good at. The connectome itself confers **no
+measurable learning advantage** on this task: the intact connectome, a shuffled graph, a
+degree-matched random graph, and the raw encoding with no reservoir at all all reach the same
+accuracy. That statement is in the HUD footer and should stay there.
+
+**Training is a switch, not a claim.** `POST /train {"fresh": true}` wipes the readout to a naive
+state (measured: chance across the course) so the learning can be watched from zero.
+`{"training": false}` freezes the weights, which is the control: same lesson, same connectome,
+same readout, plasticity off, and the curve flattens. The shipped checkpoint is already trained,
+so with it loaded there is nothing to watch — the UI says which state it is in rather than
+implying a pretrained model is learning.
+
+**The course advances.** 15 lessons across 4 units, 97 challenges. Finishing a lesson moves to
+the next one and wraps at the end, so a public demo does not dead-end on the first lesson. The
+frame reports `lesson_pos`, `lesson_total`, `lesson_title` and `lessons_completed`.
