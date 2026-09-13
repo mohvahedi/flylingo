@@ -70,6 +70,8 @@ export type LiveReadout = {
   source: 'auto' | 'manual';
   /** elapsed seconds of animator time */
   t: number;
+  /** how long the behavior now playing has been running, seconds */
+  age: number;
   /** vitality 0..1, the same number that drives the global glow floor */
   vitality: number;
   /** per-frame normalization reference actually used (p95, clamped) */
@@ -106,6 +108,7 @@ export function useAnimator(input: AnimatorInput) {
       behavior: 'idle',
       source: 'auto',
       t: 0,
+      age: 0,
       vitality: 0,
       reference: 0,
       inert: true,
@@ -120,6 +123,9 @@ export function useAnimator(input: AnimatorInput) {
   const curBehavior = useRef<Behavior>('idle');
   const blend = useRef(1);
   const prevBehavior = useRef<Behavior>('idle');
+  /** how long the current (and, across a crossfade, the previous) behavior has been running */
+  const behaviorAge = useRef(0);
+  const prevAge = useRef(0);
   const ownTime = useRef(0);
   const vital = useRef(0);
   const prevVital = useRef(0);
@@ -204,18 +210,26 @@ export function useAnimator(input: AnimatorInput) {
       prevBehavior.current = curBehavior.current;
       curBehavior.current = want;
       blend.current = 0;
+      prevAge.current = behaviorAge.current;
+      behaviorAge.current = 0;
+    }
+    if (!cfg.paused) {
+      behaviorAge.current += delta;
+      prevAge.current += delta;
     }
     if (blend.current < 1) {
       blend.current = Math.min(1, blend.current + delta / BLEND_TIME);
     }
 
     // both behaviors are evaluated at the same time t and interpolated, so a behavior
-    // change never snaps the fly's limbs
+    // change never snaps the fly's limbs. Each is evaluated at its own age: a one-shot
+    // behavior leaving the stage has to stay at the end of its envelope while it fades out,
+    // not restart at the beginning of it.
     if (blend.current >= 1) {
-      computePose(pose, t, curBehavior.current, 1, react.current);
+      computePose(pose, t, curBehavior.current, 1, react.current, behaviorAge.current);
     } else {
-      computePose(poseA, t, prevBehavior.current, 1, react.current);
-      computePose(poseB, t, curBehavior.current, 1, react.current);
+      computePose(poseA, t, prevBehavior.current, 1, react.current, prevAge.current);
+      computePose(poseB, t, curBehavior.current, 1, react.current, behaviorAge.current);
       lerpPose(pose, poseA, poseB, smoothstep(blend.current));
     }
 
@@ -223,6 +237,7 @@ export function useAnimator(input: AnimatorInput) {
     live.behavior = curBehavior.current;
     live.source = source;
     live.t = t;
+    live.age = behaviorAge.current;
     live.vitality = vital.current;
     // the sparkline tracks raw stateRms; smoothed so a 20 Hz feed does not jitter
     live.rms += (rms - live.rms) * 0.2;

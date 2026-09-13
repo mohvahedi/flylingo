@@ -67,16 +67,28 @@ export const LAYOUT = {
   phoneYaw: -Math.PI / 2 - 0.14,
   /** tilt about X, leaning the top away from the viewer */
   phonePitch: 0.03,
-  /** the fly's world span: large enough to read as the protagonist */
-  flySpan: 0.72,
+  /**
+   * The fly's world span: large enough to read as the protagonist.
+   *
+   * Measured at 0.72 the specimen filled about 9.6% of the screen's height (a 0.80 unit
+   * bounding box against a screen 8.4 tall) and read as an insect that happened to be in the
+   * shot. At 1.35 it is 18% of the screen height and about the height of the card it stands
+   * on, which is the size the composition wants: big enough to be a character, small enough
+   * that the lesson under it is still readable.
+   */
+  flySpan: 1.35,
   /** where the fly starts: in front of the phone and to its left */
   flyStart: [-4.6, 0.0, 2.4] as [number, number, number],
   /**
    * How far off the glass the fly hovers when it reaches a card, in the phone's own mesh
    * units. The screen is only 0.155 tall there, so this has to be small: an earlier value of
    * 0.05 was a third of the screen height and threw the fly well clear of the handset.
+   *
+   * Scaled up with flySpan, so the specimen stands the same distance off the card in its own
+   * body lengths as it did at 0.72: 0.006 here puts its feet plane 0.32 world units (3.8% of
+   * the screen height) in front of the glass.
    */
-  standoff: 0.004,
+  standoff: 0.006,
   /** corrected so the model's own forward lines up with the direction of travel */
   flyYawOffset: 0,
   /**
@@ -84,9 +96,11 @@ export const LAYOUT = {
    *
    * Not the centre: the option text sits on the left of each card, and a fly with a 1.6 unit
    * wingspan landing centrally covered the text of the card next to it. Perched to the right
-   * it reads as sitting on the answer without hiding it.
+   * it reads as sitting on the answer without hiding it. Moved out to 0.88 when the specimen
+   * grew, so its head and the forelegs it reaches out with stay on the card instead of
+   * hanging off the right edge of the screen.
    */
-  flyCardU: 0.84,
+  flyCardU: 0.88,
   /** how long the flight from wherever it is to the chosen card takes, in seconds */
   flySeconds: 1.6,
   /** easing exponent for the flight: 2 eases in and out, which reads as a dart not a slide */
