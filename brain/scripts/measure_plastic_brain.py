@@ -110,12 +110,44 @@ for seed_i in range(SEEDS):
         for ep in range(1, EPOCHS + 1):
             idx = np.random.default_rng(ep).permutation(len(X))  # fixed order across arms
             losses = [brain.observe(X[i], y[i])["loss"] for i in idx]
-            curve.append(
-                {"epoch": ep, "accuracy": brain.accuracy(X, y), "loss": float(np.mean(losses))}
-            )
+            acc = brain.accuracy(X, y)
+            curve.append({"epoch": ep, "accuracy": acc, "loss": float(np.mean(losses))})
+            # Print every epoch: this is flushed line by line into the run log, so a stall is
+            # distinguishable from progress. A run that only reports at arm end looks identical
+            # to a hung one, which is the trap that wastes an hour before anyone notices.
+            print(f"    epoch {ep:>3}: acc {acc:6.1%}   loss {np.mean(losses):.4f}", flush=True)
 
         tail = [c["accuracy"] for c in curve[-SCORE_TAIL:]]
         s = r.plastic_scale
+
+        # SAVE THE TRAINED WEIGHTS, and prove the reported number can be reproduced from them.
+        #
+        # This used to write only the accuracy curve, so every trained brain was discarded when
+        # the process exited: 117,800 trained synaptic scales thrown away and unrecoverable, which
+        # meant a reported figure could never be re-examined, re-scored or reused. It also hid a
+        # real bug for hours -- a saved checkpoint would have exposed immediately that arm 2's
+        # baseline sat at 8x the anatomical weights.
+        #
+        # Numbers are a description of an artifact; the artifact is the thing worth keeping.
+        ckpt = OUT / f"arm_s{seed_i}_{mode}.npz"
+        ckpt_meta = brain.save(ckpt)
+
+        # Reload it through the same refusal guards the service uses and recompute the score.
+        # If a stored brain cannot reproduce the number it is about to be reported for, the
+        # number is not trustworthy and this arm must fail loudly rather than be written out.
+        verify_r = FlyReservoir(connectome, embedding_dim=256, dims=128, seed=r_seed)
+        verify_r.set_mode(mode)
+        verify = PlasticBrain(
+            verify_r, n_pools=4, pool_size=200, seed=b_seed, steps=6
+        )
+        verify.set_mode(mode)
+        verify.load(ckpt)
+        reloaded_final = verify.accuracy(X, y)
+        assert abs(reloaded_final - curve[-1]["accuracy"]) < 1e-6, (
+            f"{mode} seed {seed_i}: checkpoint reproduces {reloaded_final:.4f} but the curve "
+            f"reports {curve[-1]['accuracy']:.4f}; refusing to record an unreproducible number"
+        )
+
         per_seed[seed_i][mode] = {
             "curve": curve,
             "score": float(statistics.mean(tail)),
@@ -125,11 +157,15 @@ for seed_i in range(SEEDS):
             "plastic_edges": int(s.size),
             "scale_max": float(s.max()),
             "seconds": time.perf_counter() - t0,
+            "checkpoint": str(ckpt),
+            "checkpoint_reproduces_final": float(reloaded_final),
+            "checkpoint_updates": int(ckpt_meta["updates"]),
         }
         print(
             f"  --> start {curve[0]['accuracy']:.1%}  final-epoch {curve[-1]['accuracy']:.1%}  "
             f"last-{SCORE_TAIL} mean {per_seed[seed_i][mode]['score']:.1%}   "
-            f"scales max {s.max():.2f}   {per_seed[seed_i][mode]['seconds']:.0f}s"
+            f"scales max {s.max():.2f}   {per_seed[seed_i][mode]['seconds']:.0f}s   "
+            f"saved {ckpt.name} (reproduced {reloaded_final:.1%})"
         )
 
 # ------------------------------------------------------- aggregate across seeds
